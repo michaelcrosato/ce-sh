@@ -193,6 +193,21 @@ Format: date, issue, evidence, decision, consequence, rollback.
 
 - Decision: parse and validate first; the swap happens at the frame boundary after a full GPU wait (new world, upload, history reset, simulation restart). The asset root is `<executable dir>/assets`; scene paths that leave it are refused. The diagnostic panel (Dear ImGui) is deferred to M5 with the settings UI; reload results go to the log and the title.
 
+## D-038 (2026-09-06) Dear ImGui drawn into the swap-chain image after the present copy
+
+- Decision: the interface (prompts, objective line, controls card, pause menu with settings, diagnostic panel) is Dear ImGui v1.92.9b with its Win32 and D3D12 backends, compiled from the pinned submodule as `lc_imgui` (third-party code at `/W3`, not `/WX`); `lc_ui` wraps it behind `ui::Ui`. The window forwards every message to the backend first; the renderer exposes `RecordOverlay`, which records into the frame after the copy to the back buffer (PRESENT → RENDER_TARGET → PRESENT), so the linear output, captures, and validation never contain interface pixels. The backend compiles its two shaders with `D3DCompile` once at start-up (system `d3dcompiler_47.dll`); no other runtime shader compilation exists.
+- Consequence: `--no-ui` removes the interface and the benchmark never creates it (its `overlay` timer would otherwise appear in the pass table); the menu releases the cursor and stops the simulation; settings apply the same frame (sensitivity, inverted look, field of view, exposure); the volumes and text cues are stored for the sound system.
+
+## D-039 (2026-09-06) The placeholder body stays clear of the camera by placement
+
+- Decision: spec §14 forbids camera-ray exclusion, so the torso box is centred 1.0 m up and 6 cm behind the eye axis (its top 0.32 m below the eye, its front face under the eye) and the hands rest in front of the waist (1.05 m up, 16 cm forward, 20 cm to the side). The floor stays visible down to 0.3 m from the feet; the chest enters the view only when the player looks almost straight down; the hands at pitches steeper than about 52 degrees.
+- Consequence: the first placement (torso 5 cm in front of the eye, top at 1.38 m) hid the T06 floor patch one metre ahead and turned the check 4x darker; the fix moved the body, not the threshold. T13's reflected-torso identity check holds with either placement.
+
+## D-040 (2026-09-06) Collision: yaw-only boxes, a capsule as a circle, substeps
+
+- Decision: every kit box with `collider` on becomes a yaw-only oriented box from its mesh bounds (walls, slabs, furniture, the door leaf, which is updated per tick); the player is a vertical capsule of radius 0.3 m, height 1.7 m, and a 5 cm skin, resolved on the ground plane as a circle pushed out along the axis it entered from (the previous position decides the side, so a centre exactly on a face never crosses to the far side), in substeps of at most a quarter radius with four resolve iterations each; the carried lamp's housing sphere (radius 0.125 m) is swept from the eye toward its held pose and stops where it is free; a closing door that overlaps the player swings back open (`Door::Block`). Line-of-sight queries use segment tests against the same boxes.
+- Consequence: no physics library; no vertical motion (the proof has one floor level, spec §14); entity-placed objects (body, lamp, threat) default to non-colliding so they never block their owner. The mirror replay route grazed the sink block by 10 cm, so the sink moved 20 cm (`two_room.json`), keeping the tolerances.
+
 ## D-013 (2026-09-06) Repository workflow for this session
 
 - Decision: work on branch `m0-m1-bootstrap` with small commits; nothing is pushed; `build/` and `artifacts/` are ignored. The owner decides on merging.

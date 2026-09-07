@@ -12,15 +12,19 @@ Milestone:            M0 PASSED, M1 PASSED, M2 PASSED, M3 PASSED,
                       schema 1) with complete validation, limits, and asset-root containment; reload at a frame
                       boundary that never replaces a working scene with a broken one; content hashes in captures and
                       reports; the diagnostic panel is deferred to M5 (KI-017).
-                      M5 in progress: collision (capsule against the kit boxes, lamp sweep, door that never traps
-                      the player) and the placeholder player body are written and tested on the CPU; the rest of
-                      M5 (prompts and menus, sound, threat states, objective, restart) follows the M5 plan.
+                      M5 in progress (Tasks 1-3 of 6 PASSED): collision (capsule against the kit boxes, lamp
+                      sweep, a door that never traps the player), the placeholder body visible in the mirror and
+                      clear of the camera by placement, and the interface (prompts, objective line, controls
+                      card, pause menu with settings, F1 diagnostic panel, reload from the menu) are built, tested,
+                      and image-checked; sound, threat states, the objective with catch and checkpoint restart,
+                      and the records with the human play-through follow the M5 plan.
 Build or commit:      branch m0-m1-bootstrap; see git log for the exact commit.
-                      Presets windows-debug and windows-release both configured, built, and tested (46 tests each).
+                      Presets windows-debug and windows-release both configured, built, and tested (47 tests each).
 Environment:          Windows 11 Home 10.0.26200.9278 (25H2); Intel Core i7-14700F, 31.8 GiB RAM;
                       Visual Studio Community 2026 18.9.12120.119, MSVC 14.51.36231 (cl 19.51.36256);
                       CMake 4.3.1-msvc1 (VS-bundled); Windows SDK 10.0.26100.0; DXC 1.8.2502.11 + dxil.dll;
-                      NRD v4.17.3, ShaderMake 18f5a344, MathLib v11 as git submodules (docs/DEPENDENCIES.md).
+                      NRD v4.17.3, ShaderMake 18f5a344, MathLib v11, Dear ImGui v1.92.9b, miniaudio 0.11.25 as
+                      git submodules (docs/DEPENDENCIES.md); miniaudio is pinned but not yet compiled (Task 4).
 Implemented in this session:
                       M0/M1: CMake presets, build-time DXC, lc_core, lc_scene, Win32 window, D3D12 device/queue/swap
                       chain/resources/timestamps/BLAS/TLAS, diagnostics, layout probe, captures, resize test, docs.
@@ -42,11 +46,23 @@ Implemented in this session:
                       static_motion / trail_lag / denoised patches; the benchmark command with the §21 report
                       (build and content hashes, device, sizes, settings, CPU/GPU distributions, memory);
                       typed UAV load/store capability checks for every new format.
-Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean; 6 shaders (cs_6_5, HLSL 2021, -WX -Zpr) plus NRD's
-                      31 DXIL blobs through ShaderMake with the same DXC.
-                      CPU TESTED: lc_cpu_tests 73/73 PASSED (both presets): + NRD matrix conversion and jitter
-                      sequence, trail-lag metric, benchmark statistics and report, new option rules.
-                      GPU EXECUTED + PASSED (both presets), 43 GPU tests (ctest 44/44):
+                      M3.5: scene files (schema 1, validation, limits, containment, reload, content hashes).
+                      M5 (so far): CollisionWorld (yaw-only boxes from the kit, capsule push-out with substeps,
+                      sphere sweep for the carried lamp, segment tests), the door that swings back when it meets
+                      the player, the placeholder torso and hands in the scene file and the world, lc_imgui +
+                      lc_ui (Dear ImGui through a window message hook and Renderer::RecordOverlay into the back
+                      buffer after the present copy), the pause menu with live settings (sensitivity, inverted
+                      look, field of view, exposure; volumes and text cues stored for the sound system), the
+                      objective line, the controls card, the F1 panel, restart and reload from the menu, --no-ui.
+Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean (ImGui itself at /W3, no warnings); 6 shaders
+                      (cs_6_5, HLSL 2021, -WX -Zpr) plus NRD's 31 DXIL blobs through ShaderMake with the same DXC.
+                      CPU TESTED: lc_cpu_tests 82/82 PASSED (both presets): + scene-file golden load, rejection
+                      of every rule, limits and containment (3 cases); collision (6 cases).
+                      GPU EXECUTED + PASSED (both presets), 46 GPU tests (ctest 47/47):
+                        M5: t13 reflection (the mirror reports the torso after one bounce, the torso is not
+                          directly visible, the reflected torso is lit); every M3/M4 replay now runs against the
+                          collision solids with unchanged expectations (Release t06 door-open patch 0.01963).
+                        M3.5: scene reload test, --scene-file option.
                         M1-M3 as before (33), all still passing with the reworked renderer (raw and reference paths
                           unchanged; the layout probe now checks 35 fields including GuideConstants).
                         M4: split lossless on the closed form (raw mean -0.24 % / +0.21 %; denoised -3.6 % / -4.0 %
@@ -60,7 +76,12 @@ Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean; 6 shaders (cs_
                         D3D12 debug layer: 0 errors, 0 warnings in every Debug run; invalid-value counters 0.
 GPU and driver used:  NVIDIA GeForce RTX 4070 SUPER, vendor 0x10DE device 0x2783 rev 161, 11997 MiB,
                       driver 32.0.16.1047 (NVIDIA 610.47, 2026-05-18); DXR Tier 1.2, SM 6.8, root signature 1.1.
-Image evidence:       IMAGE CHECKED (artifacts/m4, regenerate with docs/BUILD.md and docs/TESTS.md; not committed).
+Image evidence:       IMAGE CHECKED (artifacts/m4 and artifacts/m5/ui, regenerate with docs/BUILD.md and
+                      docs/TESTS.md; not committed).
+                      M5 interface: seven screen captures of the live window (controls card, door prompt, pause
+                      menu, menu with the F1 panel, play with the panel, "Close the door" after the door opened
+                      with the threat in the doorway, the start pose after Restart from the menu); the pass table
+                      shows the overlay at 0.01 ms; no D3D12 debug-layer messages during the run.
                       t08_box denoised after 16 frames: smooth walls and soft contact shadows, no visible noise.
                       two_room tick 740 denoised (exposure 6): the dark inspection room with the mirror showing the
                       warm-lit hall and the threat silhouette, clean shading, no residual noise; the history overlay
@@ -73,25 +94,31 @@ Image evidence:       IMAGE CHECKED (artifacts/m4, regenerate with docs/BUILD.md
 Performance evidence: PERFORMANCE CHECKED, instrumentation and the §17 protocol on the two-room proof (not the full
                       encounter): see the benchmark table below. Frame-time distributions come from --benchmark-seconds
                       reports (Release, vsync off, windowed 1920x1080 output, 1280x720 internal, denoised mode).
-Failed checks:        None outstanding. During M4: the first denoised analytic run was 7-9 % dark (NRD's
-                      pre-accumulation blur and a miss-dominated hit distance); fixed by switching the pre-pass off and
-                      mixing the light-sample distance into the diffuse hit distance (D-034), not by widening the
-                      tolerance. A static-motion check point was off screen (moved to a pixel). The scaled resize test
-                      first judged the internal size instead of the presented size.
+Failed checks:        None outstanding. During M5: the first body placement (torso 5 cm in front of the eye) hid
+                      the T06 floor patch a metre ahead and the door-open check fell from 0.0196 to 0.0048 (below
+                      its 0.005 minimum); fixed by moving the body behind the eye axis (D-039), not the threshold.
+                      The mirror replay grazed the sink block once collision existed (the sink moved 20 cm).
+                      During M4: the first denoised analytic run was 7-9 % dark (NRD's pre-accumulation blur and a
+                      miss-dominated hit distance); fixed by switching the pre-pass off and mixing the light-sample
+                      distance into the diffuse hit distance (D-034), not by widening the tolerance. A static-motion
+                      check point was off screen (moved to a pixel). The scaled resize test first judged the
+                      internal size instead of the presented size.
 Checks not run and reasons:
-                      T11 offset sweeps, T13 collision (M5), T14-T18 (later; T16 needs the 180-second full-encounter
-                      replay of M5/M6, the command exists). DLSS/Streamline: NOT RUN (deferred). History confidence
-                      inputs: not provided (KI-019). Second RTX device: only one GPU present. 30-minute reliability
-                      loop, live-object report under a debugger: NOT RUN. T12 review by a person at normal playback
-                      speed: NOT RUN (the automated lag metric, the frame sequences, and the overlays are the evidence).
+                      T11 offset sweeps, T13's sound part (Task 4), T14-T18 (later; T16 needs the 180-second
+                      full-encounter replay of M5/M6, the command exists). DLSS/Streamline: NOT RUN (deferred).
+                      History confidence inputs: not provided (KI-019). Second RTX device: only one GPU present.
+                      30-minute reliability loop, live-object report under a debugger: NOT RUN. T12 review by a
+                      person at normal playback speed: NOT RUN (the automated lag metric, the frame sequences, and
+                      the overlays are the evidence). The menu's mouse path was driven by posted messages, not a
+                      person's hand; the human play-through is Task 6.
 Changed assumptions:  NRD's license is NVIDIA's proprietary RTX SDK license (attribution required; not open source):
                       recorded for the owner's review. The denoiser's spatial filter biases sharp lighting gradients
                       by a few percent (KI-018); the raw mean stays exact. Mirror planes are static for the PSR
                       motion (KI-020).
-Next concrete task:   M5 Task 3 of docs/superpowers/plans/2026-09-06-m5-playable-proof.md (Dear ImGui prompts, pause
-                      menu, settings, diagnostic panel), then Tasks 4 (sound), 5 (threat states, objective, catch and
-                      checkpoint restart), and 6 (records; T13-T15 replays; the human play-through). Tasks 1 and 2
-                      (collision, body) are implemented and unit-tested; their GPU replay tests run with Task 6.
+Next concrete task:   M5 Task 4 of docs/superpowers/plans/2026-09-06-m5-playable-proof.md (miniaudio, generated
+                      clips, attenuation and occlusion, state-following, volumes, text cues), then Task 5 (threat
+                      states, objective, catch and checkpoint restart) and Task 6 (records; T14-T15 replays; the
+                      human play-through; performance re-measured with the M5 content).
 ```
 
 ## Benchmark table (M4, two-room proof)

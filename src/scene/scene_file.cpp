@@ -55,6 +55,7 @@ struct ObjectSpec {
     std::optional<float> yaw;         // box: explicit orientation.
     std::optional<AimSpec> aim;       // box: derived orientation (mirror).
     bool collider = true;
+    bool colliderGiven = false;       // The file stated 'collider' explicitly.
     bool placedByEntity = false;      // Set while resolving entities.
 };
 
@@ -81,6 +82,7 @@ struct Document {
     std::vector<MarkerSpec> markers;
     // Entities.
     std::string playerStart;
+    std::string playerTorso, playerHandLeft, playerHandRight;  // Optional body parts.
     std::string doorObject;
     std::string lampHousing, lampFace, lampMaterial, lampStartSocket, lampPlaceSocket;
     float lampFaceOffset = 0.101f;
@@ -335,6 +337,7 @@ void ParseObjects(Reader& r, const json::Value& root, Document& doc) {
         if (const json::Value* c = v.Get("collider"); c != nullptr) {
             if (!c->IsBool()) r.Error(std::format("{}: 'collider' must be a boolean", where));
             else o.collider = c->AsBool();
+            o.colliderGiven = c->IsBool();
         }
         if (o.kind == "slab") {
             if (r.ReadVec3(v, w, "min", o.min, true, -maxC, maxC) && r.ReadVec3(v, w, "max", o.max, true, -maxC, maxC)) CheckExtent(r, where, o.min, o.max);
@@ -568,6 +571,7 @@ void ParseEntities(Reader& r, const json::Value& root, Document& doc) {
         if (placedByEntity) {
             if (o->centre) r.Error(std::format("{}: object '{}' is placed by the entity and must not have a 'centre'", where, id));
             o->placedByEntity = true;
+            if (!o->colliderGiven) o->collider = false;  // Moving entities are not static solids (the door leaf is handled by the door).
         }
         return true;
     };
@@ -577,6 +581,18 @@ void ParseEntities(Reader& r, const json::Value& root, Document& doc) {
 
     if (const json::Value* player = section("player")) {
         if (r.ReadString(*player, "entities.player", "start", doc.playerStart, true)) requireMarker(doc.playerStart, "entities.player.start");
+        const bool torso = r.ReadString(*player, "entities.player", "torso", doc.playerTorso, false);
+        const bool left = r.ReadString(*player, "entities.player", "handLeft", doc.playerHandLeft, false);
+        const bool right = r.ReadString(*player, "entities.player", "handRight", doc.playerHandRight, false);
+        if (torso || left || right) {
+            if (!(torso && left && right)) {
+                r.Error("entities.player: 'torso', 'handLeft', and 'handRight' come together");
+            } else {
+                requireObject(doc.playerTorso, "entities.player.torso", "box", true);
+                requireObject(doc.playerHandLeft, "entities.player.handLeft", "box", true);
+                requireObject(doc.playerHandRight, "entities.player.handRight", "box", true);
+            }
+        }
     }
     if (const json::Value* door = section("door")) {
         if (r.ReadString(*door, "entities.door", "object", doc.doorObject, true)) requireObject(doc.doorObject, "entities.door.object", "door_leaf", false);
@@ -719,6 +735,14 @@ TwoRoomLevel BuildLevel(const Document& doc, std::string_view sourceName, std::u
                 const MeshId mesh = s.AddMesh(MakeBox(o.id, o.half));
                 id = s.AddInstance(o.id, mesh, ThreatHeadTransform(threatPose), mat);
                 level.threatHead = id;
+            } else if (!doc.playerTorso.empty() && (o.id == doc.playerTorso || o.id == doc.playerHandLeft || o.id == doc.playerHandRight)) {
+                const MeshId mesh = s.AddMesh(MakeBox(o.id, o.half));
+                const PoseSpec feet{start->position, start->hasYaw ? start->yaw : 0.0f, 0.0f};
+                const Mat4 transform = o.id == doc.playerTorso ? PlayerTorsoTransform(feet) : PlayerHandTransform(feet, o.id == doc.playerHandRight);
+                id = s.AddInstance(o.id, mesh, transform, mat);
+                if (o.id == doc.playerTorso) level.playerTorso = id;
+                else if (o.id == doc.playerHandLeft) level.playerHandLeft = id;
+                else level.playerHandRight = id;
             } else {
                 float yaw = o.yaw.value_or(0.0f);
                 if (o.aim) {

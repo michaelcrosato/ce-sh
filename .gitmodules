@@ -7,3 +7,9 @@
 [submodule "external/MathLib"]
 	path = external/MathLib
 	url = https://github.com/NVIDIA-RTX/MathLib.git
+[submodule "external/imgui"]
+	path = external/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "external/miniaudio"]
+	path = external/miniaudio
+	url = https://github.com/mackron/miniaudio.git

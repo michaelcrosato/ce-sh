@@ -16,6 +16,7 @@
 #include "render/render_snapshot.h"
 #include "render/scene_gpu.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -138,6 +139,9 @@ public:
     // Copies (or resamples) the display image into a swap-chain buffer; skipped with a log message
     // when the sizes match neither the internal nor the output size (the caller resizes next frame).
     void RecordCopyToBackBuffer(ID3D12Resource* backBuffer, std::uint32_t backBufferWidth, std::uint32_t backBufferHeight);
+    // Records extra work into the open frame after the present copy (the interface overlay draws
+    // into the back buffer). The callback receives the frame's command list.
+    void RecordOverlay(const std::function<void(ID3D12GraphicsCommandList4*)>& record);
     // Closes, executes, and signals. Returns the fence value of this frame.
     std::uint64_t EndFrame();
 

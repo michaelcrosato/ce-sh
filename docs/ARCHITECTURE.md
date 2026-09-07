@@ -14,8 +14,10 @@ State at milestone M1. Everything below exists in the code; nothing is a plan.
 | `lc_graphics` | `src/graphics/d3d12` | Device/adapter/feature checks, queue + fence, swap chain, descriptor heap, buffers, UAV textures + readback, upload arena, timestamp queries, BLAS/TLAS, root signature + compute PSO | `lc_platform` |
 | `lc_render` | `src/render` | `SceneGpu` (geometry residency, BLAS per mesh, TLAS, per-frame instance/material/emitter tables), `Renderer` (diagnostic pass, path tracer in raw and reference modes, the denoised path: guided trace, NRD, compose, resampling; accumulation, readback, layout probe), `NrdDenoiser` (D3D12 backend for NRD's API), capture and sequence writers | `lc_graphics`, `lc_scene`, `NRD` |
 | `lc_scene` (scene files) | `src/scene/scene_file.*` | Versioned JSON scene files: parse, validate every rule and limit, asset-root containment, then build the level through the room kit; `assets/scenes/two_room.json` is the proof level | `lc_core` (JSON reader) |
-| `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks), `World` (player, door, lamp fixture, threat, interaction, reset) | `lc_scene`, `lc_core` |
-| `LastCircuit.exe` | `src/app` | Modes (list adapters, windowed, headless, play, record, replay, validate, resize test, capture, stats), environment report, main loop | everything above |
+| `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks), `CollisionWorld` (yaw-only boxes, capsule push-out, sphere sweep, segment tests), `World` (player with the capsule, door that never traps, lamp fixture with the sweep, threat, placeholder body, interaction, reset) | `lc_scene`, `lc_core` |
+| `lc_imgui` | `external/imgui` (built by `src/ui/CMakeLists.txt`) | Dear ImGui core with the Win32 and D3D12 backends, third-party code compiled without `/WX` | `d3dcompiler` (backend start-up) |
+| `lc_ui` | `src/ui` | `ui::Ui`: interface frame (prompt, objective, cue, controls card, pause menu with `ui::Settings`, diagnostic panel) recorded into the back buffer after the present copy; the window message hook | `lc_imgui`, `lc_graphics`, `lc_platform` |
+| `LastCircuit.exe` | `src/app` | Modes (list adapters, windowed, headless, play, record, replay, validate, resize test, capture, stats, benchmark, reload test), environment report, main loop, interface state (pause, settings, diagnostics) | everything above |
 | `lc_cpu_tests.exe` | `tests/cpu` | Portable unit tests, including CPU runs of the committed replays | `lc_core`, `lc_scene`, `lc_game`, options, contracts |
 
 The scene and game layers (`lc_scene`, `lc_game`) contain no D3D12 types. The renderer reads a
@@ -100,6 +102,6 @@ that root and refused when they leave it.
 
 ## Not yet present
 
-Collision (M5), DLSS reconstruction (deferred evaluation), audio (M5), the glTF/GLB subset and the
-diagnostic panel (§16, deferred), the objective and threat state machines (M5), the six-room level
+DLSS reconstruction (deferred evaluation), audio (M5), the glTF/GLB subset (deferred), the
+objective and threat state machines with the catch and checkpoint restart (M5), the six-room level
 (M6). `docs/STATUS.md` names the next task.

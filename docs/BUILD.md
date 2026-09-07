@@ -80,11 +80,19 @@ with `-Od`, the Release preset with `-O3`.
 ```
 
 Live play (`--play`, scene `two_room`): W A S D move, mouse look, Shift sprint, E interact (door,
-lamp pick-up, placing the lamp on a socket), F lamp switch, Escape releases or recaptures the
-cursor (the simulation pauses while it is released or the window lacks focus). Add
-`--record <file>` to write the per-tick input as a replay on exit; `--replay <file>` plays it
-back one tick per frame, and `--stop-at-tick N` freezes the world at tick N for reference-mode
-renders and `--validate` checks.
+lamp pick-up, placing the lamp on a socket), F lamp switch, R reload the scene file, F1 the
+diagnostic panel, Escape the pause menu (the cursor is released, the simulation stops; the menu
+has Resume, Restart, Reload, Quit and the settings: mouse sensitivity, inverted look, horizontal
+field of view, exposure, volumes, text cues, the panel). Losing focus pauses too. The interface
+(prompts at the bottom, the objective at the top left, the controls card at the start) is drawn
+into the swap-chain image after the present copy, so captures and validation never contain it;
+`--no-ui` removes it and the benchmark never draws it. Add `--record <file>` to write the
+per-tick input as a replay on exit; `--replay <file>` plays it back one tick per frame, and
+`--stop-at-tick N` freezes the world at tick N for reference-mode renders and `--validate` checks.
+The player is a capsule (radius 0.3 m, height 1.7 m) against the kit boxes; the carried lamp is
+swept back toward the player where it would enter a solid; a closing door that meets the player
+swings back open. The placeholder body (torso and hands, `player_suit`) is placed so it stays out
+of the direct view except at steep pitches and appears in mirrors and shadows.
 
 Denoised mode (M4):
 

@@ -29,7 +29,7 @@ git submodule update --init --recursive   # NRD and its build helpers (pinned; n
 cmake --preset windows-debug
 cmake --build --preset windows-debug
 ctest --preset windows-debug --output-on-failure
-.\build\windows-debug\bin\LastCircuit.exe --scene two_room --play --exposure 4 # walk the two-room proof (WASD, mouse, E, F, Escape)
+.\build\windows-debug\bin\LastCircuit.exe --scene two_room --play --exposure 4 # walk the two-room proof (WASD, mouse, E, F; Escape menu, F1 panel, R reload)
 .\build\windows-debug\bin\LastCircuit.exe --scene two_room --play --mode denoised --exposure 4   # the same, reconstructed (NRD)
 .\build\windows-debug\bin\LastCircuit.exe --scene t08_box --mode reference     # path-traced Cornell-style box
 .\build\windows-debug\bin\LastCircuit.exe --scene rt_boxes --mode diag         # M1 diagnostic normals view

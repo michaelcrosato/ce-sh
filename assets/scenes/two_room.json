@@ -17,7 +17,8 @@
     {"id": "fixture_a", "type": "emitter", "radiance": [6.0, 5.8, 5.4], "reflectance": [0.02, 0.02, 0.02], "circuit": "a"},
     {"id": "hall_emergency", "type": "emitter", "radiance": [5.0, 1.2, 0.8], "reflectance": [0.02, 0.02, 0.02], "circuit": "hall"},
     {"id": "fixture_b", "type": "emitter", "radiance": [5.0, 4.9, 4.7], "reflectance": [0.02, 0.02, 0.02], "circuit": "b"},
-    {"id": "lamp_face", "type": "emitter", "radiance": [120.0, 112.0, 100.0], "reflectance": [0.02, 0.02, 0.02], "circuit": "lamp"}
+    {"id": "lamp_face", "type": "emitter", "radiance": [120.0, 112.0, 100.0], "reflectance": [0.02, 0.02, 0.02], "circuit": "lamp"},
+    {"id": "player_suit", "type": "diffuse", "reflectance": [0.3, 0.32, 0.36]}
   ],
   "circuits": [
     {"id": "a", "on": true},
@@ -43,13 +44,16 @@
     {"id": "fixture_a", "kind": "emitter_rect", "width": 0.8, "height": 0.8, "position": [2.0, 2.79, 2.0], "facing": [0.0, -1.0, 0.0], "material": "fixture_a"},
     {"id": "hall_emergency", "kind": "emitter_rect", "width": 0.4, "height": 0.4, "position": [6.8, 2.79, 5.0], "facing": [0.0, -1.0, 0.0], "material": "hall_emergency"},
     {"id": "fixture_b", "kind": "emitter_rect", "width": 0.8, "height": 0.8, "position": [6.0, 2.79, 10.0], "facing": [0.0, -1.0, 0.0], "material": "fixture_b"},
-    {"id": "sink_block", "kind": "box", "half": [0.4, 0.45, 0.3], "centre": [7.4, 0.45, 10.0], "material": "sink_block"},
+    {"id": "sink_block", "kind": "box", "half": [0.4, 0.45, 0.3], "centre": [7.6, 0.45, 10.0], "material": "sink_block"},
     {"id": "lamp_shelf", "kind": "slab", "min": [4.0, 0.9, 10.0], "max": [4.3, 0.95, 10.5], "material": "lamp_shelf"},
     {"id": "mirror", "kind": "box", "half": [0.6, 0.8, 0.01], "centre": [6.4, 1.5, 12.0], "aim": {"camera": "mirror_check_camera", "cameraHeight": 1.6, "target": "threat_check", "targetHeight": 0.9}, "material": "mirror"},
     {"id": "lamp_housing", "kind": "box", "half": [0.05, 0.05, 0.10], "material": "lamp_housing", "collider": false},
     {"id": "lamp_face", "kind": "quad", "half": [0.03, 0.03], "material": "lamp_face"},
     {"id": "threat_body", "kind": "box", "half": [0.25, 0.6, 0.2], "material": "threat_metal"},
-    {"id": "threat_head", "kind": "box", "half": [0.15, 0.15, 0.15], "material": "threat_metal"}
+    {"id": "threat_head", "kind": "box", "half": [0.15, 0.15, 0.15], "material": "threat_metal"},
+    {"id": "player_torso", "kind": "box", "half": [0.18, 0.28, 0.12], "material": "player_suit", "collider": false},
+    {"id": "player_hand_l", "kind": "box", "half": [0.05, 0.04, 0.08], "material": "player_suit", "collider": false},
+    {"id": "player_hand_r", "kind": "box", "half": [0.05, 0.04, 0.08], "material": "player_suit", "collider": false}
   ],
   "sockets": [
     {"id": "floor_a", "position": [3.0, 0.0, 0.9], "yaw": -1.5707963},
@@ -64,7 +68,7 @@
     {"id": "threat_check", "position": [7.0, 0.0, 1.9]}
   ],
   "entities": {
-    "player": {"start": "player_start"},
+    "player": {"start": "player_start", "torso": "player_torso", "handLeft": "player_hand_l", "handRight": "player_hand_r"},
     "door": {"object": "door"},
     "lamp": {"housing": "lamp_housing", "face": "lamp_face", "faceOffset": 0.101, "material": "lamp_face", "startSocket": "floor_a", "placeSocket": "shelf"},
     "threat": {"body": "threat_body", "head": "threat_head", "path": "threat_route", "parkAt": "threat_check"},

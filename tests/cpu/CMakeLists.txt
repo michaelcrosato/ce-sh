@@ -5,6 +5,7 @@ add_executable(lc_cpu_tests
     lc_test_main.cpp
     test_benchmark.cpp
     test_cli.cpp
+    test_collision.cpp
     test_emitters.cpp
     test_image_write.cpp
     test_json.cpp

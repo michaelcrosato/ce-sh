@@ -51,6 +51,11 @@ struct TwoRoomLevel {
     InstanceId mirror;
     math::Vec3 mirrorNormal;        // Unit normal of the mirror's reflecting face (toward the room).
     PoseSpec playerStart;           // Room A, facing the door.
+    // Placeholder body (spec §14): rigid boxes that follow the player pose below and beside the
+    // camera so reflections and shadows show the player; kept clear of the camera by placement.
+    InstanceId playerTorso;
+    InstanceId playerHandLeft;
+    InstanceId playerHandRight;
     PoseSpec mirrorCheckCamera;     // Room B, facing the mirror.
     math::Vec3 mirrorCheckPoint;    // Point on the mirror face whose reflection reaches the threat.
     math::Vec3 hallCheckPoint;      // Hall floor point seen through the mirror when the threat is absent.
@@ -75,5 +80,8 @@ math::Mat4 LampHousingTransform(const PoseSpec& pose);
 math::Mat4 LampFaceTransform(const PoseSpec& pose, float faceOffset);
 math::Mat4 ThreatBodyTransform(const PoseSpec& pose);
 math::Mat4 ThreatHeadTransform(const PoseSpec& pose);
+// Player body parts from the feet pose (yaw only: the body does not pitch with the view).
+math::Mat4 PlayerTorsoTransform(const PoseSpec& feet);
+math::Mat4 PlayerHandTransform(const PoseSpec& feet, bool right);
 
 }  // namespace lc

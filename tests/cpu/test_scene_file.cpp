@@ -52,8 +52,8 @@ LC_TEST(scene_file_two_room_loads_and_matches_the_proof_layout) {
     LC_CHECK_EQ(level.description.name, std::string("two_room"));
     LC_CHECK(r.contentHash != 0);
     LC_CHECK_EQ(level.contentHash, r.contentHash);
-    // Materials: default grey + 14 from the file; the lamp face is the emitter the lamp toggles.
-    LC_CHECK_EQ(s.Materials().size(), std::size_t{15});
+    // Materials: default grey + 15 from the file; the lamp face is the emitter the lamp toggles.
+    LC_CHECK_EQ(s.Materials().size(), std::size_t{16});
     LC_CHECK_EQ(s.Materials()[level.lampMaterial].name, std::string("lamp_face"));
     LC_CHECK(s.Materials()[level.lampMaterial].emitterOn);
     // Circuit b is off: fixture_b stays a surface.
@@ -64,10 +64,12 @@ LC_TEST(scene_file_two_room_loads_and_matches_the_proof_layout) {
     LC_CHECK(fixtureBOff);
     LC_CHECK_EQ(level.circuits.size(), std::size_t{4});
     // Objects: 12 walls/floor/ceiling entries (two wall_opening objects give 3 instances each) + door + crate +
-    // 3 emitter rectangles + sink + shelf + mirror + lamp housing + lamp face + threat body + head = 28 instances.
-    LC_CHECK_EQ(s.Instances().size(), std::size_t{28});
+    // 3 emitter rectangles + sink + shelf + mirror + lamp housing + lamp face + threat body + head + the three
+    // player body parts = 31 instances.
+    LC_CHECK_EQ(s.Instances().size(), std::size_t{31});
     LC_CHECK(FindInstance(s, "floor") != nullptr);
-    LC_CHECK(FindInstance(s, "a_wall_pos_x_lintel") != nullptr || FindInstance(s, "a_wall_pos_x_top") != nullptr || s.Instances().size() == 28);
+    LC_CHECK_EQ(level.playerTorso.value, FindInstance(s, "player_torso")->id.value);
+    LC_CHECK(FindInstance(s, "player_hand_r") != nullptr);
     LC_CHECK_EQ(level.hallFloorId.value, FindInstance(s, "floor")->id.value);
     LC_CHECK_EQ(level.door.id.value, FindInstance(s, "door")->id.value);
     LC_CHECK_NEAR(level.door.hinge.x, 4.025f, 1e-6f);  // Hinge line of the leaf: wall face + inset 0.005 + half thickness 0.02.

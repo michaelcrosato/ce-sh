@@ -3,6 +3,7 @@
 // types; the renderer only sees the Scene and a Camera.
 #pragma once
 
+#include "game/collision.h"
 #include "game/input.h"
 #include "scene/camera.h"
 #include "scene/scene.h"
@@ -26,9 +27,11 @@ public:
     static constexpr float kSprintSpeed = 2.6f;
     static constexpr float kEyeHeight = 1.6f;
     static constexpr float kMaxPitch = 1.4835f;  // 85 degrees.
+    static constexpr Capsule kCapsule{0.3f, 1.7f, 0.05f};  // Spec §14: capsule-like controller.
 
     void Reset(const PlayerPose& pose);
-    void Tick(const InputFrame& input, float dt);
+    // Moves against the collision solids when given (walls and furniture; slides along them).
+    void Tick(const InputFrame& input, float dt, const CollisionWorld* colliders = nullptr);
     const PlayerPose& Current() const { return current_; }
     const PlayerPose& Previous() const { return previous_; }
     PlayerPose At(float alpha) const;
@@ -52,6 +55,8 @@ public:
     explicit Door(const DoorHandle& handle) : handle_(handle) {}
     void Interact();
     void Tick(float dt);
+    // A closing leaf that would enter the player's volume swings back open (spec §14: never trap the player).
+    void Block();
     DoorState State() const { return state_; }
     bool IsMoving() const { return state_ == DoorState::Opening || state_ == DoorState::Closing; }
     float Angle() const { return angle_; }
@@ -79,8 +84,11 @@ public:
     void PickUp();
     void Place(const SocketSpec& socket);
     void Toggle(Scene& scene);
-    // Held lamps follow the player's eye pose; placed lamps keep the socket pose.
-    void Tick(const Player& player);
+    // Held lamps follow the player's eye pose, swept back toward the player when the housing
+    // would enter a solid (spec §14); placed lamps keep the socket pose.
+    void Tick(const Player& player, const CollisionWorld* colliders = nullptr);
+    static constexpr float kHousingRadius = 0.125f;  // Bounding sphere of the housing box.
+    static constexpr float kHousingCentreHeight = 0.05f;
     PoseSpec PoseAt(float alpha) const;
     const PoseSpec& Current() const { return current_; }
 
@@ -151,23 +159,28 @@ public:
     Threat& GetThreat() { return threat_; }
     Scene& GetScene() { return level_.description.scene; }
     const Scene& GetScene() const { return level_.description.scene; }
+    const CollisionWorld& Colliders() const { return colliders_; }
     std::uint64_t Ticks() const { return ticks_; }
+    std::uint32_t DoorBlocks() const { return doorBlocks_; }
 
     // Resolves an entity name used by replay checks to a stable instance id (0 when unknown).
     std::uint32_t StableIdOf(const std::string& entity) const;
 
 private:
     TwoRoomLevel level_;
+    CollisionWorld colliders_;
     Player player_;
     Door door_;
     Lamp lamp_;
     Threat threat_;
     std::uint64_t ticks_ = 0;
+    std::uint32_t doorBlocks_ = 0;
     // Last written render state, to avoid bumping transform revisions when nothing moved.
     bool wroteOnce_ = false;
     float lastDoorAngle_ = 0.0f;
     PoseSpec lastLampPose_;
     PoseSpec lastThreatPose_;
+    PoseSpec lastBodyPose_;
 };
 
 }  // namespace lc::game

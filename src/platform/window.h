@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace lc {
@@ -65,6 +66,10 @@ public:
     void SetClientSize(std::uint32_t width, std::uint32_t height);
     void SetTitle(const std::wstring& title);
 
+    // A hook that sees every message first (the interface library); returning true ends handling.
+    using MessageHook = std::function<bool(HWND, UINT, WPARAM, LPARAM)>;
+    void SetMessageHook(MessageHook hook) { hook_ = std::move(hook); }
+
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
@@ -83,6 +88,7 @@ private:
     bool rawMouseEnabled_ = false;
     bool cursorCaptured_ = false;
     bool cursorHidden_ = false;
+    MessageHook hook_;
 };
 
 }  // namespace lc

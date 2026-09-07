@@ -32,7 +32,7 @@ Vec3 Player::Forward(const PlayerPose& pose) const {
     return {-std::sin(pose.yaw), 0.0f, -std::cos(pose.yaw)};
 }
 
-void Player::Tick(const InputFrame& input, float dt) {
+void Player::Tick(const InputFrame& input, float dt, const CollisionWorld* colliders) {
     previous_ = current_;
     current_.yaw += input.lookDx;
     current_.pitch = std::clamp(current_.pitch + input.lookDy, -kMaxPitch, kMaxPitch);
@@ -44,7 +44,12 @@ void Player::Tick(const InputFrame& input, float dt) {
         move = move / length;
     }
     const float speed = input.sprint ? kSprintSpeed : kWalkSpeed;
-    current_.position += move * (speed * dt);
+    const Vec3 delta = move * (speed * dt);
+    if (colliders != nullptr) {
+        current_.position = colliders->MoveCapsule(current_.position, delta, kCapsule);
+    } else {
+        current_.position += delta;
+    }
 }
 
 PlayerPose Player::At(float alpha) const {
@@ -88,6 +93,11 @@ void Door::Interact() {
             state_ = DoorState::Closing;
             break;
     }
+}
+
+void Door::Block() {
+    angle_ = previousAngle_;
+    state_ = DoorState::Opening;
 }
 
 void Door::Tick(float dt) {
@@ -142,10 +152,17 @@ PoseSpec Lamp::HeldPose(const Player& player, const PlayerPose& pose) {
     return p;
 }
 
-void Lamp::Tick(const Player& player) {
+void Lamp::Tick(const Player& player, const CollisionWorld* colliders) {
     previous_ = current_;
     if (state_ == LampState::Held) {
         current_ = HeldPose(player, player.Current());
+        if (colliders != nullptr) {
+            // Sweep the housing volume from the eye to the held pose; stop where it is free of solids.
+            const Vec3 lift{0.0f, kHousingCentreHeight, 0.0f};
+            const Vec3 eye = player.EyePosition(player.Current());
+            const Vec3 housing = colliders->SweepSphere(eye, current_.position + lift, kHousingRadius);
+            current_.position = housing - lift;
+        }
     }
 }
 
@@ -247,6 +264,8 @@ PoseSpec Threat::At(float alpha) const {
 
 World::World(TwoRoomLevel level)
     : level_(std::move(level)), door_(level_.door), lamp_(level_, level_.floorSocket), threat_(level_.threatPath, level_.threatSpeed) {
+    colliders_.Build(GetScene(), level_.colliders);
+    colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, 0.0f));
     player_.Reset({level_.playerStart.position, level_.playerStart.yaw, level_.playerStart.pitch});
     lastLampPose_ = lamp_.Current();
     lastThreatPose_ = threat_.Current();
@@ -261,7 +280,9 @@ void World::Reset() {
     lamp_ = Lamp(level_, level_.floorSocket);
     GetScene().SetEmitterOn(level_.lampMaterial, true);  // The fixture starts switched on.
     threat_ = Threat(level_.threatPath, level_.threatSpeed);
+    colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, 0.0f));
     ticks_ = 0;
+    doorBlocks_ = 0;
     wroteOnce_ = false;
     lastDoorAngle_ = 0.0f;
     lastLampPose_ = lamp_.Current();
@@ -325,10 +346,18 @@ void World::Tick(const InputFrame& input, float dt) {
         lamp_.Toggle(GetScene());
         log::Debug("tick {}: lamp {}", ticks_, lamp_.IsOn() ? "on" : "off");
     }
-    player_.Tick(input, dt);
+    player_.Tick(input, dt, &colliders_);
     door_.Tick(dt);
+    // The leaf's collision follows its state; a leaf closing into the player swings back open.
+    colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, door_.Angle()));
+    if (door_.State() == DoorState::Closing && colliders_.CapsuleOverlaps(player_.Current().position, Player::kCapsule)) {
+        door_.Block();
+        colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, door_.Angle()));
+        ++doorBlocks_;
+        log::Debug("tick {}: door blocked by the player, reopening", ticks_);
+    }
     threat_.Tick(dt);
-    lamp_.Tick(player_);
+    lamp_.Tick(player_, &colliders_);
     ++ticks_;
 }
 
@@ -354,6 +383,17 @@ bool World::WriteRenderScene(Scene& scene, float alpha) {
         lastThreatPose_ = threatPose;
         changed = true;
     }
+    if (level_.playerTorso.value != 0) {
+        const PlayerPose pose = player_.At(alpha);
+        const PoseSpec feet{pose.position, pose.yaw, 0.0f};
+        if (!wroteOnce_ || !SamePose(feet, lastBodyPose_)) {
+            scene.SetTransform(level_.playerTorso, PlayerTorsoTransform(feet));
+            scene.SetTransform(level_.playerHandLeft, PlayerHandTransform(feet, false));
+            scene.SetTransform(level_.playerHandRight, PlayerHandTransform(feet, true));
+            lastBodyPose_ = feet;
+            changed = true;
+        }
+    }
     wroteOnce_ = true;
     return changed;
 }
@@ -366,6 +406,7 @@ std::uint32_t World::StableIdOf(const std::string& entity) const {
     if (entity == "lamp_housing") return level_.lampHousing.value;
     if (entity == "lamp_face") return level_.lampFace.value;
     if (entity == "floor") return level_.hallFloorId.value;
+    if (entity == "player_torso") return level_.playerTorso.value;
     for (const Instance& inst : GetScene().Instances()) {
         if (inst.name == entity) return inst.id.value;
     }

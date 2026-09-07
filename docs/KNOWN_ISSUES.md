@@ -72,22 +72,25 @@ with small bright sources; the estimator is unbiased. The spec allows evaluating
 outlier clamp later (off in reference mode, bias recorded); the denoiser (M4) is the other half of
 the answer. Verification: an M4 test comparing patch means with and without the clamp.
 
-## KI-015 — medium — play mode — no collision or sweeps yet
+## KI-015 — closed in M5 — collision and sweeps
 
-The player and the carried lamp pass through walls and doors (spec §14 collision is M5). The
-replays avoid geometry by construction. Verification: M5 capsule controller with the T13 test.
+The capsule controller (`src/game/collision.*`, D-040) keeps the player and the carried lamp out
+of the kit boxes and the door leaf; a closing leaf that meets the player swings back open. CPU
+tests cover the push-out, sliding, the sweep, and the door; the replays now run against the same
+solids (the mirror route grazed the sink block, which moved 20 cm to keep the path clear).
 
 ## KI-016 — low — all builds — dark rooms need exposure
 
 With fixed exposure 1 the hall and the inspection room are nearly black on screen (their light
 levels are a design choice; the radiance checks are unaffected). `--exposure` scales the display
-only; a documented tone curve and an accessibility brightness control arrive with M5/M7.
+only and the pause menu has an exposure slider (M5); a documented tone curve arrives with M7.
 
-## KI-017 — info — play mode — no on-screen prompts or diagnostic panel
+## KI-017 — closed in M5 — on-screen prompts, pause menu, diagnostic panel
 
-The interaction target is logged (`[E] door`) instead of drawn, and the scene reload (R) reports
-to the log and the window title; the diagnostic panel (Dear ImGui) is deferred to M5 with the
-settings UI (spec §16 asks for "a reload command and a small diagnostic panel"; the command exists).
+Dear ImGui (D-038) draws the interaction prompt, the objective line, the controls card, the pause
+menu with the settings, and the F1 diagnostic panel (GPU passes, CPU time, history resets, world
+state, scene file and hash, reload result). The reload command (R, or the menu) reports its result
+in the panel and the log.
 
 ## KI-018 — medium — denoised mode — spatial filtering biases sharp lighting gradients
 
@@ -111,6 +114,20 @@ The virtual motion assumes the mirror plane did not move (D-030). No mirror move
 
 Streamline was not added in M4 (the native path came first; the SDK is a separate proprietary
 dependency). The bilinear `--internal` path is the only scaled presentation.
+
+## KI-022 — low — denoised mode — first-frame hitch
+
+The denoiser (NRD instance, 14 pipelines, pool textures) is created on the first denoised frame,
+which takes about 0.8 s in Debug (`simulation clamped a long frame (0.800 s)` in the play log) and
+less in Release. The fixed-step simulation caps the catch-up, so play starts cleanly; the cost
+belongs in the loading phase before the first frame (M7 packaging).
+
+## KI-023 — info — play mode — the body is a placeholder
+
+Spec §14 allows a simple rigid construction and asks that it be recorded: the body is a torso box
+and two hand boxes in `player_suit`, placed behind the eye axis (D-039). The hands do not grip the
+carried lamp and there are no arms or legs; the mirror therefore shows a floating torso with two
+hands and the lamp beside them. A proper body is M6/M7 content.
 
 ## KI-012 — info — all builds — raw mode is noisy by design
 

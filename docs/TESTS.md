@@ -18,7 +18,7 @@ a supported GPU therefore reports the GPU tests as NOT RUN.
 Tolerances were chosen before the tests were run and are recorded here; they must not be widened
 to pass. When a scene was redesigned (T07, see below) the tolerance stayed and the scene changed.
 
-## CPU tests (`cpu_tests`, 50 cases in `tests/cpu`)
+## CPU tests (`cpu_tests`, 82 cases in `tests/cpu`)
 
 | File | Checks |
 |---|---|
@@ -41,6 +41,7 @@ to pass. When a scene was redesigned (T07, see below) the tolerance stayed and t
 | `test_temporal_checks.cpp` | Trail-lag metric: measured lag on synthetic series, pass/fail against the limit, and invalid series (never leaves, too short, re-entry, no contrast) reported instead of guessed |
 | `test_benchmark.cpp` | Nearest-rank percentiles, median, counts above 33.3 / 50 ms; the report parses back as JSON with every required section |
 | `test_scene_file.cpp` | The golden `two_room.json` reproduces the proof level (material and instance counts, circuit states, door hinge, sockets, path, markers, the derived mirror aim within 1e-5, collider flags, deterministic reload hash); every validation rule rejects a patched document with a message naming the list, identifier, or field (schema, JSON syntax, duplicate id, unknown material, reflectance range, unknown circuit, box without centre, negative extent, opening leaving no wall, non-axis facing, unknown marker, objectives not implemented, zero speed); limits (object count, file size); asset-root containment (parent traversal and absolute paths refused, missing file reported) |
+| `test_collision.cpp` | Oriented boxes from the level's kit parts (the door leaf follows its angle); the capsule is pushed out of a wall it enters and slides along it; a centre on a face never crosses to the far side; the sphere sweep stops the carried lamp at a wall; a closing door that meets the player swings back open (`DoorBlocks` counts it); segment tests see through an open doorway and not through the closed leaf; the player cannot walk through the closed door or the walls in the replays (`t05`, `t06`) |
 
 ## GPU tests (`tests/gpu/CMakeLists.txt`)
 
@@ -150,6 +151,18 @@ Cross-run comparisons via `tests/scripts/compare_runs.ps1` (patch means per chan
 | `gpu_t07_agrees_with_higher_sample_reference` | `t07_bleed`: `mis` 2048 spp vs 256 spp | Within 2 % or 3 SE (spec T07: agreement with a higher-sample reference) |
 | `gpu_t08_box_depth_truncation_report` | `t08_box`: 12 hits vs 4 hits, 512 spp | Informational (never fails): reports the truncation bias of the 4-hit production budget |
 
+### M5: the playable proof (spec §14, §19 T13)
+
+| Test | Command (abridged) | Checks |
+|---|---|---|
+| `gpu_t13_player_in_reflection` | `--replay t13_reflection.json --stop-at-tick 760 --mode reference --spp 64 --validate` | At the mirror-check pose the mirror pixel aimed at (6.4, 1.35, 12.0) reports `player_torso` after one mirror bounce (the player is not omitted from reflections); the torso is not directly visible at level pitch; the reflected torso patch is lit (minimum 5e-6, measured 2e-5 with the lamp on the floor socket and the hall spill) |
+
+The collision part of T13 (neither the body nor the lamp passes through an opaque wall) runs on
+the CPU (`test_collision.cpp`), and every replay now moves the player against the same solids: a
+replay that walked through geometry would stop at the wall and its pose checks would fail. The
+T06 door-open test caught the first body placement (D-039): the torso hid the floor patch a metre
+ahead and the check dropped from 0.0196 to 0.0048; the body moved, the threshold did not.
+
 ### Mirror expectation derivation (`mirror_box`)
 
 Camera at (0, 1.2, 3.0) looking along -Z; mirror front face at z = -1.98 (4.98 m away). A ray that
@@ -189,11 +202,20 @@ Approved image baselines are not yet stored; radiance is currently checked numer
   overlays of the same frame, tick 300 (open door) and tick 800 (shelf lamp) denoised, and the
   three cropped sequences with their event logs (`artifacts/m4/seq_*`).
 
+- Interface (M5, `artifacts/m5/ui`): screen captures of the live window (`--play --mode denoised`)
+  driven by posted key and mouse messages: the controls card with the objective line and the
+  door prompt at the start; the prompt alone after the first step; the pause menu (Escape) with
+  the settings; the menu with the F1 panel; play with the panel; "Close the door" after E opened
+  the door with the threat visible through the doorway; the start pose again after Restart from
+  the menu (mouse click); the log shows pause, resume, restart, and quit from the menu and no
+  D3D12 messages. Captures through `--capture` never contain the interface (it is drawn into the
+  back buffer after the copy).
+
 ## Not yet implemented
 
 T11 systematic offset sweeps (partly covered by the T03/T04 seals and the 400 m furnace floor),
-T13–T18 (T16's fixed 180-second full-encounter replay needs the M5/M6 content; the benchmark
-command exists). The §4 fourth sequence step (the threat's shadow moving across a wall before
-direct contact) is staged in M5. T12 human confirmation at normal playback speed is recorded in
-STATUS.md as NOT RUN with a person; the automated lag metric and the frame sequences are the
-evidence.
+T14–T18 (T16's fixed 180-second full-encounter replay needs the M5/M6 content; the benchmark
+command exists); T13's sound part (the lamp's audio position). The §4 fourth sequence step (the
+threat's shadow moving across a wall before direct contact) is staged in M5. T12 human
+confirmation at normal playback speed is recorded in STATUS.md as NOT RUN with a person; the
+automated lag metric and the frame sequences are the evidence.

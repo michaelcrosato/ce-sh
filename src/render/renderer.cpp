@@ -794,6 +794,15 @@ void Renderer::RecordCopyToBackBuffer(ID3D12Resource* backBuffer, std::uint32_t 
     timers_.End(list_.Get(), copyTimer);
 }
 
+void Renderer::RecordOverlay(const std::function<void(ID3D12GraphicsCommandList4*)>& record) {
+    if (!frameOpen_) {
+        throw Error("Renderer::RecordOverlay called outside BeginFrame/EndFrame");
+    }
+    const std::uint32_t timer = timers_.Begin(list_.Get(), "overlay");
+    record(list_.Get());
+    timers_.End(list_.Get(), timer);
+}
+
 std::uint64_t Renderer::EndFrame() {
     if (!frameOpen_) {
         throw Error("Renderer::EndFrame called without BeginFrame");

@@ -178,6 +178,9 @@ LRESULT CALLBACK Window::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
 }
 
 LRESULT Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+    if (hook_ && hook_(hwnd_, message, wParam, lParam)) {
+        return 1;
+    }
     switch (message) {
         case WM_CLOSE:
             events_.closeRequested = true;

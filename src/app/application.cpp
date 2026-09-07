@@ -21,6 +21,7 @@
 #include "scene/builtin_scenes.h"
 #include "scene/scene_file.h"
 #include "scene/two_room_level.h"
+#include "ui/ui.h"
 
 #define PSAPI_VERSION 2
 #include <psapi.h>
@@ -120,7 +121,7 @@ double ChannelAverage(const double v[3]) { return (v[0] + v[1] + v[2]) / 3.0; }
 double Luminance(const double v[3]) { return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; }
 
 // Live input to a simulation tick. Mouse deltas are consumed by the first tick of a frame.
-game::InputFrame InputFromWindow(const Window& window, float sensitivity, bool consumeEdges) {
+game::InputFrame InputFromWindow(const Window& window, float sensitivity, bool invertY, bool consumeEdges) {
     const RawInputState& raw = window.Input();
     game::InputFrame f;
     if (raw.keyDown['W']) f.moveZ += 1.0f;
@@ -130,11 +131,35 @@ game::InputFrame InputFromWindow(const Window& window, float sensitivity, bool c
     f.sprint = raw.keyDown[VK_SHIFT];
     if (consumeEdges) {
         f.lookDx = -raw.mouseDx * sensitivity;  // Mouse right turns right (toward +X at yaw 0).
-        f.lookDy = -raw.mouseDy * sensitivity;  // Mouse up looks up.
+        f.lookDy = (invertY ? raw.mouseDy : -raw.mouseDy) * sensitivity;  // Mouse up looks up unless inverted.
         f.interactPressed = raw.keyPressed['E'];
         f.lampPressed = raw.keyPressed['F'];
     }
     return f;
+}
+
+bool InputIsActive(const game::InputFrame& f) {
+    return f.moveX != 0.0f || f.moveZ != 0.0f || f.lookDx != 0.0f || f.lookDy != 0.0f || f.interactPressed || f.lampPressed;
+}
+
+// Player-facing prompt for the current interaction target (spec §14: a clear prompt).
+std::string PromptFor(game::World& world, const game::InteractionTarget& target) {
+    if (target.name == "door") {
+        const game::DoorState s = world.GetDoor().State();
+        return (s == game::DoorState::Closed || s == game::DoorState::Closing) ? "Open the door" : "Close the door";
+    }
+    if (target.name == "lamp") return "Take the lamp";
+    if (target.name == world.Level().shelfSocket.name) return "Place the lamp on the shelf";
+    if (target.name == world.Level().floorSocket.name) return "Put the lamp down here";
+    return "Use " + target.name;
+}
+
+// Stand-in objective line until the objective state machine (M5 Task 5) drives it.
+std::string ObjectiveFor(game::World& world) {
+    const game::Lamp& lamp = world.GetLamp();
+    if (lamp.State() == game::LampState::Held) return "Carry the lamp to the shelf in the far room";
+    if (lamp.SocketName() == world.Level().shelfSocket.name) return "The lamp is on the shelf. Look around";
+    return "Find the lamp and pick it up";
 }
 
 // Evaluates one radiance-style expectation on the readback. Returns the pass/fail and a detail line.
@@ -353,6 +378,23 @@ int Application::RunRender() {
                 window->CaptureCursor(true);
             }
         }
+        // On-screen interface (spec §14 prompts, §15 cues, §16 diagnostic panel): never in a benchmark
+        // or with --no-ui. Drawn into the back buffer after the present copy; the linear output is untouched.
+        std::unique_ptr<ui::Ui> ui;
+        if (window && !options_.noUi && options_.benchmarkSeconds <= 0.0f) {
+            ui = std::make_unique<ui::Ui>(*window, *device, queue, swapChain->Format());
+        }
+        ui::Settings uiSettings;
+        uiSettings.mouseSensitivity = options_.mouseSensitivity;
+        uiSettings.horizontalFovDegrees = options_.horizontalFovDegrees;
+        uiSettings.exposure = options_.exposure;
+        ui::Overlay overlay;
+        overlay.introCard = options_.play && ui != nullptr;
+        bool paused = false;
+        bool showDiagnostics = false;
+        bool menuReload = false;
+        std::string lastReloadText;
+        double lastCpuMs = 0.0;
 
         const std::uint32_t initialWidth = window ? window->ClientWidth() : options_.width;
         const std::uint32_t initialHeight = window ? window->ClientHeight() : options_.height;
@@ -503,7 +545,11 @@ int Application::RunRender() {
                     break;
                 }
                 if (ev.escapePressed) {
-                    if (options_.play) {
+                    if (options_.play && ui) {
+                        paused = !paused;  // The menu releases the cursor; the simulation stops while it is open.
+                        window->CaptureCursor(!paused);
+                        log::Info("{}", paused ? "paused: menu open" : "resumed");
+                    } else if (options_.play) {
                         window->CaptureCursor(!window->CursorCaptured());  // Escape pauses look/move by releasing the cursor.
                         log::Info("cursor {}", window->CursorCaptured() ? "captured" : "released (Escape again to capture)");
                     } else {
@@ -514,7 +560,13 @@ int Application::RunRender() {
                 }
                 if (ev.focusLost) {
                     log::Debug("Focus lost");
-                    if (options_.play) window->CaptureCursor(false);
+                    if (options_.play) {
+                        window->CaptureCursor(false);
+                        if (ui && !paused) {
+                            paused = true;
+                            log::Info("paused: focus lost");
+                        }
+                    }
                 }
                 if (ev.focusGained) log::Debug("Focus gained");
                 if (ev.resized || swapChain->Width() != window->ClientWidth() || swapChain->Height() != window->ClientHeight()) {
@@ -535,17 +587,25 @@ int Application::RunRender() {
                 }
             }
 
+            // Key edges sampled once per frame, before the ticks consume the input record.
+            const bool diagnosticsKey = window && window->Input().keyPressed[VK_F1];
+            const bool reloadKey = window && options_.play && window->Input().keyPressed['R'];
+            if (diagnosticsKey && ui) {
+                showDiagnostics = !showDiagnostics;
+            }
+
             // Simulation (spec §9 order: input, fixed-step ticks, interpolated render data).
             float alpha = 1.0f;
             bool worldChanged = false;
             if (world) {
                 if (options_.play) {
-                    const bool active = window && window->CursorCaptured() && window->HasFocus();
+                    const bool active = window && window->CursorCaptured() && window->HasFocus() && !paused;
                     if (active) {
                         bool first = true;
                         const auto step = simulation.Advance(realSeconds, [&](std::uint64_t tick, float dt) {
-                            const game::InputFrame input = InputFromWindow(*window, options_.mouseSensitivity, first);
+                            const game::InputFrame input = InputFromWindow(*window, uiSettings.mouseSensitivity, uiSettings.invertY, first);
                             first = false;
+                            if (overlay.introCard && InputIsActive(input)) overlay.introCard = false;
                             world->Tick(input, dt);
                             if (options_.record) recording.Record(tick, input);
                         });
@@ -554,13 +614,17 @@ int Application::RunRender() {
                     } else {
                         (void)simulation.Advance(0.0, [](std::uint64_t, float) {});  // Paused: no ticks, no catch-up.
                     }
-                    if (window) window->ClearInput();
                     const auto target = world->CurrentInteraction();
                     const std::string targetName = target ? target->name : "";
                     if (targetName != lastInteraction) {
                         if (!targetName.empty()) log::Info("[E] {}", targetName);
                         lastInteraction = targetName;
                     }
+                    overlay.prompt = target ? PromptFor(*world, *target) : std::string();
+                    const bool lampNear = world->GetLamp().State() == game::LampState::Held || targetName == "lamp";
+                    overlay.hint = lampNear ? (world->GetLamp().IsOn() ? "Switch the lamp off" : "Switch the lamp on") : std::string();
+                    overlay.objectiveLine = ObjectiveFor(*world);
+                    overlay.cueSeconds = std::max(0.0f, overlay.cueSeconds - static_cast<float>(realSeconds));
                 } else if (!frozenReplay) {
                     if (benchmark && simulation.Tick() > replay->LastTick()) {
                         world->Reset();  // Back to the start: a camera cut, so the temporal history is invalid.
@@ -575,13 +639,68 @@ int Application::RunRender() {
                 worldChanged = world->WriteRenderScene(*scenePtr, alpha);
                 if (worldChanged) ++motionFrames;
                 camera = world->CameraAt(alpha);
-                camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
+                camera.horizontalFovRadians = math::DegreesToRadians(ui ? uiSettings.horizontalFovDegrees : options_.horizontalFovDegrees);
             }
+            if (window) window->ClearInput();
+
+            // Interface for this frame: prompts and cues while playing, the pause menu, the diagnostic
+            // panel. Settings from the menu apply immediately (sensitivity, look inversion, field of
+            // view, exposure); the volumes wait for the sound system.
+            ui::MenuAction menuAction = ui::MenuAction::None;
+            if (ui) {
+                ui->BeginFrame();
+                if (world && options_.play && !paused) ui->DrawOverlay(overlay);
+                if (paused) menuAction = ui->DrawPauseMenu(uiSettings, showDiagnostics);
+                if (showDiagnostics) {
+                    ui::Diagnostics d;
+                    d.mode = modeLabel;
+                    d.gpuMs = FindTiming(renderer.LastTimings(), "frame_gpu");
+                    d.cpuMs = lastCpuMs;
+                    d.frame = frameIndex;
+                    d.tick = simulation.Tick();
+                    d.historyResets = renderer.HistoryResetCount();
+                    d.denoiserDispatches = renderer.DenoiserDispatchCount();
+                    for (const gfx::TimerResult& t : renderer.LastTimings()) d.passes.emplace_back(t.name, t.milliseconds);
+                    if (world) {
+                        d.door = game::DoorStateName(world->GetDoor().State());
+                        d.lampOn = world->GetLamp().IsOn();
+                        d.lamp = world->GetLamp().State() == game::LampState::Held ? "held" : world->GetLamp().SocketName();
+                        const PoseSpec tp = world->GetThreat().Current();
+                        d.threat = std::format("({:.2f}, {:.2f}, {:.2f}) along {:.1f} of {:.1f} m", tp.position.x, tp.position.y, tp.position.z,
+                                               world->GetThreat().Distance(), world->GetThreat().PathLength());
+                        d.objective = ObjectiveFor(*world);
+                    }
+                    d.sceneFile = levelFile.string();
+                    d.sceneHash = sceneContentHash != 0 ? sceneContentHash : scenePtr->ContentHash();
+                    d.lastReload = lastReloadText;
+                    ui->DrawDiagnostics(d);
+                }
+                if (uiSettings.exposure != integrator.exposure) {
+                    integrator.exposure = uiSettings.exposure;
+                    renderer.SetIntegrator(integrator);
+                }
+            }
+            if (menuAction == ui::MenuAction::Quit) {
+                log::Info("quit from the menu");
+                break;
+            }
+            if (menuAction == ui::MenuAction::Resume || menuAction == ui::MenuAction::Restart || menuAction == ui::MenuAction::Reload) {
+                paused = false;
+                if (window && options_.play) window->CaptureCursor(true);
+                log::Info("resumed from the menu");
+            }
+            if (menuAction == ui::MenuAction::Restart && world) {
+                world->Reset();  // A camera cut: the temporal history is invalid.
+                renderer.ResetHistory();
+                simulation = game::Simulation(tickRate);
+                log::Info("restart from the menu at frame {}", frameIndex);
+            }
+            menuReload = menuAction == ui::MenuAction::Reload;
 
             // Scene reload (spec §16): parse and validate first; only a valid document replaces the world, at
-            // this frame boundary after a full GPU wait, with the temporal history reset. R in play mode, or
-            // the --reload-test hook at frame 2.
-            const bool reloadRequested = world && ((options_.play && window && window->Input().keyPressed['R']) || (options_.reloadTest && frameIndex == 2));
+            // this frame boundary after a full GPU wait, with the temporal history reset. R in play mode, the
+            // menu, or the --reload-test hook at frame 2.
+            const bool reloadRequested = world && (reloadKey || menuReload || (options_.reloadTest && frameIndex == 2));
             if (reloadRequested) {
                 std::optional<TwoRoomLevel> fresh;
                 if (loadLevel(fresh)) {
@@ -592,10 +711,12 @@ int Application::RunRender() {
                     renderer.ResetHistory();
                     simulation = game::Simulation(tickRate);
                     ++reloadCount;
+                    lastReloadText = std::format("ok at frame {} (reload {})", frameIndex, reloadCount);
                     log::Info("scene reloaded ({}): world reset, history reset, frame {}", reloadCount, frameIndex);
                 } else {
                     log::Warn("scene reload refused: the current scene stays in place");
                     ++reloadFailures;
+                    lastReloadText = std::format("REFUSED at frame {}: the file has problems (see the log)", frameIndex);
                 }
             }
 
@@ -628,6 +749,9 @@ int Application::RunRender() {
             renderer.RecordTrace(snapshot);
             if (swapChain) {
                 renderer.RecordCopyToBackBuffer(swapChain->CurrentBackBuffer(), swapChain->Width(), swapChain->Height());
+                if (ui) {
+                    renderer.RecordOverlay([&](ID3D12GraphicsCommandList4* list) { ui->Render(list, swapChain->CurrentBackBuffer()); });
+                }
             }
             renderer.EndFrame();
             if (swapChain) {
@@ -719,6 +843,7 @@ int Application::RunRender() {
             ++frameIndex;
 
             const double cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
+            lastCpuMs = cpuMs;
             cpuAccumMs += cpuMs;
             ++cpuAccumFrames;
             const auto now = std::chrono::steady_clock::now();
