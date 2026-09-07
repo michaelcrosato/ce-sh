@@ -1,12 +1,21 @@
 # lc_core: portable utilities with no Windows or graphics dependencies.
 add_library(lc_core STATIC
+    cli.cpp
+    cli.h
     clock.cpp
     clock.h
     error.cpp
     error.h
     ids.h
+    image_write.cpp
+    image_write.h
     log.cpp
     log.h
+    math/camera_math.cpp
+    math/camera_math.h
+    math/mat.cpp
+    math/mat.h
+    math/vec.h
 )
 
 target_include_directories(lc_core PUBLIC
