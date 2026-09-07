@@ -45,8 +45,11 @@ Milestone:            M0 PASSED, M1 PASSED, M2 PASSED, M3 PASSED,
                       meets the test matrix": every automated row does; T12's review by a person, the
                       play-through, and listening are NOT RUN, so the gate as a whole is NOT RUN.
                       M7 built; the package exists and its automated evidence PASSED; the gate NOT RUN. The
-                      package (dist\LastCircuit-0.1.0-9d04601c6110-win64, 4.7 MB in 17 files; the zip 2.5 MB
-                      with its SHA-256) is the executable with the static CRT (no redistributable; its imports
+                      package (dist\LastCircuit-0.1.0-e336f1d3f62d-win64, built from the T17 commit; 4.7 MB
+                      in 17 files; the zip 2.5 MB, SHA-256 6c1a5c5fa29d90a9ab3724da4fb18b048b4a16f5cdf663
+                      dedc40dd1281fd1896; the packaged build's benchmark below was run from the previous
+                      package, 9d04601c6110, whose code differs only by the memory line and the end card's
+                      text) is the executable with the static CRT (no redistributable; its imports
                       are the in-box ADVAPI32, D3DCOMPILER_47, USER32, d3d12, dxgi, KERNEL32, GDI32, SHELL32,
                       IMM32), the shaders and assets, the two demo replays, the generated NOTICES.txt with the
                       NVIDIA attribution and every shipped license verbatim, README.txt, KNOWN_ISSUES.md, the
