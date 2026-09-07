@@ -3,6 +3,7 @@
 #include "core/json_reader.h"
 #include "scene/primitives.h"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <fstream>
@@ -31,6 +32,8 @@ struct MaterialSpec {
 struct CircuitSpec {
     std::string id;
     bool on = true;
+    std::string poweredByItem;    // Optional: on exactly when this item sits in this socket.
+    std::string poweredBySocket;
 };
 
 struct AimSpec {
@@ -40,10 +43,22 @@ struct AimSpec {
     float targetHeight = 0.0f;
 };
 
+struct FanSpec {
+    Vec3 axis{1.0f, 0.0f, 0.0f};
+    float radius = 0.6f;
+    std::uint32_t blades = 4;
+    float bladeWidth = 0.2f;
+    float bladeThickness = 0.03f;
+    float hubRadius = 0.1f;
+    float rpm = 40.0f;
+    std::string circuit;
+};
+
 struct ObjectSpec {
     std::string id;
-    std::string kind;  // slab, wall_opening, door_leaf, emitter_rect, box, quad.
+    std::string kind;  // slab, wall_opening, door_leaf, emitter_rect, box, quad, fan.
     std::string material;
+    FanSpec fan;                      // fan (centre in `centre`).
     Vec3 min, max;                    // slab, wall_opening.
     bool axisX = false;               // wall_opening.
     WallOpening opening;              // wall_opening.
@@ -72,6 +87,28 @@ struct MarkerSpec {
     bool hasYaw = false;
 };
 
+struct DoorEntitySpec {
+    std::string id;
+    std::string object;
+    bool locked = false;
+    std::string opensWithCircuit;
+};
+
+struct ItemSpec {
+    std::string id;
+    std::string text;
+    std::string object;                       // Plain item: one box.
+    std::string housing, face, light;         // Lit item: housing box, emitting quad, emitter material.
+    float faceOffset = 0.101f;
+    std::string startSocket;
+    bool hidesWhenCarried = false;
+};
+
+struct StepSpec {
+    std::string id, kind, item, socket, marker, requiresItem, text;
+    float radius = 0.8f;
+};
+
 struct Document {
     std::string name;
     std::vector<MaterialSpec> materials;
@@ -83,14 +120,13 @@ struct Document {
     // Entities.
     std::string playerStart;
     std::string playerTorso, playerHandLeft, playerHandRight;  // Optional body parts.
-    std::string doorObject;
-    std::string lampHousing, lampFace, lampMaterial, lampStartSocket, lampPlaceSocket;
-    float lampFaceOffset = 0.101f;
+    std::vector<DoorEntitySpec> doors;
+    std::vector<ItemSpec> items;
     std::string threatBody, threatHead, threatPath, threatParkAt;
     std::string mirrorObject, mirrorCheckCamera, mirrorAimAt, hallFloor;
-    // Objectives: the exit marker (M5). Other kinds are rejected until they exist.
-    std::string exitMarker;
-    float exitRadius = 0.8f;
+    // The objective: an ordered list of steps; the completion text once all are done.
+    std::vector<StepSpec> steps;
+    std::string objectiveComplete;
 };
 
 class Reader {
@@ -297,6 +333,15 @@ void ParseCircuits(Reader& r, const json::Value& root, Document& doc) {
             continue;
         }
         c.on = on->AsBool();
+        if (const json::Value* powered = v.Get("poweredBy"); powered != nullptr) {
+            if (!powered->IsObject()) {
+                r.Error(std::format("circuit '{}': 'poweredBy' must be an object with 'item' and 'socket'", c.id));
+            } else {
+                const std::string where = "circuit '" + c.id + "' poweredBy";
+                r.ReadString(*powered, where.c_str(), "item", c.poweredByItem, true);
+                r.ReadString(*powered, where.c_str(), "socket", c.poweredBySocket, true);
+            }
+        }
         doc.circuits.push_back(c);
     }
     for (const MaterialSpec& m : doc.materials) {
@@ -417,8 +462,31 @@ void ParseObjects(Reader& r, const json::Value& root, Document& doc) {
             if (r.ReadVec(v, w, "half", 2, half, true, minD * 0.5f, maxD * 0.5f)) o.half = {half[0], 0.0f, half[1]};
             o.collider = v.Get("collider") != nullptr ? o.collider : false;  // Quads do not collide unless asked.
             if (v.Get("centre") != nullptr) r.Error(std::format("{}: quads are placed by entities and take no 'centre'", where));
+        } else if (o.kind == "fan") {
+            // Hub and blades as boxes the world rotates about the axis while the fan's circuit is on.
+            Vec3 centre;
+            if (r.ReadVec3(v, w, "centre", centre, true, -maxC, maxC)) o.centre = centre;
+            if (r.ReadVec3(v, w, "axis", o.fan.axis, true, -1.0f, 1.0f) && !IsAxisDirection(o.fan.axis)) {
+                r.Error(std::format("{}: 'axis' must be one of the six axis directions", where));
+            }
+            r.ReadNumber(v, w, "radius", o.fan.radius, true, minD, maxD);
+            float blades = 4.0f;
+            if (r.ReadNumber(v, w, "blades", blades, true, 2.0f, static_cast<float>(r.Limits().maxFanBlades))) {
+                if (blades != std::floor(blades)) r.Error(std::format("{}: 'blades' must be a whole number", where));
+                o.fan.blades = static_cast<std::uint32_t>(blades);
+            }
+            r.ReadNumber(v, w, "bladeWidth", o.fan.bladeWidth, true, minD, maxD);
+            r.ReadNumber(v, w, "bladeThickness", o.fan.bladeThickness, true, minD, 0.5f);
+            r.ReadNumber(v, w, "hubRadius", o.fan.hubRadius, true, minD, maxD);
+            if (o.fan.hubRadius >= o.fan.radius) r.Error(std::format("{}: 'hubRadius' must be smaller than 'radius'", where));
+            r.ReadNumber(v, w, "rpm", o.fan.rpm, true, 1.0f, 600.0f);
+            r.ReadString(v, w, "circuit", o.fan.circuit, true);
+            bool circuitExists = false;
+            for (const CircuitSpec& c : doc.circuits) circuitExists = circuitExists || c.id == o.fan.circuit;
+            if (!circuitExists) r.Error(std::format("{}: circuit '{}' does not exist", where, o.fan.circuit));
+            if (!o.colliderGiven) o.collider = false;  // Mounted in a wall or duct: moving parts are not solids.
         } else {
-            r.Error(std::format("{}: unknown kind '{}' (slab, wall_opening, door_leaf, emitter_rect, box, quad)", where, o.kind));
+            r.Error(std::format("{}: unknown kind '{}' (slab, wall_opening, door_leaf, emitter_rect, box, quad, fan)", where, o.kind));
             continue;
         }
         if (o.kind == "emitter_rect") o.collider = v.Get("collider") != nullptr ? o.collider : false;
@@ -448,6 +516,19 @@ void ParseSockets(Reader& r, const json::Value& root, Document& doc) {
         const std::string where = "socket '" + s.name + "'";
         r.ReadVec3(v, where.c_str(), "position", s.position, true, -r.Limits().maxCoordinate, r.Limits().maxCoordinate);
         r.ReadNumber(v, where.c_str(), "yaw", s.yaw, false, -7.0f, 7.0f);
+        const json::Value* accepts = v.Get("accepts");
+        if (accepts == nullptr || !accepts->IsArray() || accepts->Size() == 0) {
+            r.Error(std::format("{}: 'accepts' must list at least one item id", where));
+        } else {
+            for (const json::Value& a : accepts->Items()) {
+                if (!a.IsString() || !Reader::IsIdentifier(a.AsString())) {
+                    r.Error(std::format("{}: 'accepts' entries must be item identifiers", where));
+                    break;
+                }
+                s.accepts.push_back(a.AsString());
+            }
+        }
+        if (!r.ReadString(v, where.c_str(), "text", s.text, false)) s.text = s.name;
         doc.sockets.push_back(s);
     }
 }
@@ -597,24 +678,127 @@ void ParseEntities(Reader& r, const json::Value& root, Document& doc) {
             }
         }
     }
-    if (const json::Value* door = section("door")) {
-        if (r.ReadString(*door, "entities.door", "object", doc.doorObject, true)) requireObject(doc.doorObject, "entities.door.object", "door_leaf", false);
+    // Doors: every door_leaf object belongs to exactly one door entity.
+    if (const json::Value* doors = e->Get("doors"); doors == nullptr || !doors->IsArray()) {
+        r.Error("entities: missing array 'doors'");
+    } else if (doors->Size() > r.Limits().maxDoors) {
+        r.Error(std::format("entities.doors: {} entries exceed the limit of {}", doors->Size(), r.Limits().maxDoors));
+    } else {
+        std::set<std::string> seen;
+        for (std::size_t i = 0; i < doors->Size(); ++i) {
+            const json::Value& v = *doors->At(i);
+            if (!v.IsObject()) {
+                r.Error(std::format("entities.doors[{}]: must be an object", i));
+                continue;
+            }
+            DoorEntitySpec d;
+            if (!r.ReadId(v, "entities.doors", i, seen, d.id)) continue;
+            const std::string where = "door '" + d.id + "'";
+            if (r.ReadString(v, where.c_str(), "object", d.object, true)) {
+                requireObject(d.object, where.c_str(), "door_leaf", false);
+                for (const DoorEntitySpec& other : doc.doors) {
+                    if (other.object == d.object) r.Error(std::format("{}: object '{}' already belongs to door '{}'", where, d.object, other.id));
+                }
+            }
+            if (const json::Value* locked = v.Get("locked"); locked != nullptr) {
+                if (!locked->IsBool()) r.Error(std::format("{}: 'locked' must be a boolean", where));
+                else d.locked = locked->AsBool();
+            }
+            if (r.ReadString(v, where.c_str(), "opensWithCircuit", d.opensWithCircuit, false)) {
+                bool exists = false;
+                for (const CircuitSpec& c : doc.circuits) exists = exists || c.id == d.opensWithCircuit;
+                if (!exists) r.Error(std::format("{}: circuit '{}' does not exist", where, d.opensWithCircuit));
+            }
+            doc.doors.push_back(d);
+        }
+        for (const ObjectSpec& o : doc.objects) {
+            if (o.kind != "door_leaf") continue;
+            bool owned = false;
+            for (const DoorEntitySpec& d : doc.doors) owned = owned || d.object == o.id;
+            if (!owned) r.Error(std::format("object '{}': a door_leaf needs a door entity", o.id));
+        }
     }
-    if (const json::Value* lamp = section("lamp")) {
-        if (r.ReadString(*lamp, "entities.lamp", "housing", doc.lampHousing, true)) requireObject(doc.lampHousing, "entities.lamp.housing", "box", true);
-        if (r.ReadString(*lamp, "entities.lamp", "face", doc.lampFace, true)) requireObject(doc.lampFace, "entities.lamp.face", "quad", true);
-        r.ReadNumber(*lamp, "entities.lamp", "faceOffset", doc.lampFaceOffset, true, 1e-3f, 1.0f);
-        if (r.ReadString(*lamp, "entities.lamp", "material", doc.lampMaterial, true)) {
-            const MaterialSpec* m = FindById(doc.materials, doc.lampMaterial, MaterialId);
-            if (m == nullptr || m->material.type != MaterialType::Emitter) r.Error("entities.lamp.material: must name an emitter material");
+    // Items: a lit item (housing, face, light) or a plain one (object); each starts in a socket that accepts it.
+    if (const json::Value* items = e->Get("items"); items == nullptr || !items->IsArray()) {
+        r.Error("entities: missing array 'items'");
+    } else if (items->Size() > r.Limits().maxItems) {
+        r.Error(std::format("entities.items: {} entries exceed the limit of {}", items->Size(), r.Limits().maxItems));
+    } else {
+        std::set<std::string> seen;
+        for (std::size_t i = 0; i < items->Size(); ++i) {
+            const json::Value& v = *items->At(i);
+            if (!v.IsObject()) {
+                r.Error(std::format("entities.items[{}]: must be an object", i));
+                continue;
+            }
+            ItemSpec it;
+            if (!r.ReadId(v, "entities.items", i, seen, it.id)) continue;
+            const std::string where = "item '" + it.id + "'";
+            const char* w = where.c_str();
+            if (!r.ReadString(v, w, "text", it.text, false)) it.text = it.id;
+            const bool plain = r.ReadString(v, w, "object", it.object, false);
+            const bool housing = r.ReadString(v, w, "housing", it.housing, false);
+            const bool face = r.ReadString(v, w, "face", it.face, false);
+            const bool light = r.ReadString(v, w, "light", it.light, false);
+            if (plain == (housing || face || light)) {
+                r.Error(std::format("{}: give either 'object' (a plain item) or 'housing', 'face', and 'light' (a lit item)", where));
+            } else if (plain) {
+                requireObject(it.object, w, "box", true);
+            } else {
+                if (!(housing && face && light)) r.Error(std::format("{}: a lit item needs 'housing', 'face', and 'light'", where));
+                if (housing) requireObject(it.housing, w, "box", true);
+                if (face) requireObject(it.face, w, "quad", true);
+                if (light) {
+                    const MaterialSpec* m = FindById(doc.materials, it.light, MaterialId);
+                    if (m == nullptr || m->material.type != MaterialType::Emitter) r.Error(std::format("{}: 'light' must name an emitter material", where));
+                }
+                r.ReadNumber(v, w, "faceOffset", it.faceOffset, true, 1e-3f, 1.0f);
+            }
+            if (r.ReadString(v, w, "startSocket", it.startSocket, true)) {
+                const SocketSpec* s = FindById(doc.sockets, it.startSocket, SocketId);
+                if (s == nullptr) r.Error(std::format("{}: socket '{}' does not exist", where, it.startSocket));
+                else if (std::find(s->accepts.begin(), s->accepts.end(), it.id) == s->accepts.end()) {
+                    r.Error(std::format("{}: socket '{}' does not accept it", where, it.startSocket));
+                }
+                for (const ItemSpec& other : doc.items) {
+                    if (other.startSocket == it.startSocket) r.Error(std::format("{}: socket '{}' already holds item '{}'", where, it.startSocket, other.id));
+                }
+            }
+            if (const json::Value* hides = v.Get("hidesWhenCarried"); hides != nullptr) {
+                if (!hides->IsBool()) r.Error(std::format("{}: 'hidesWhenCarried' must be a boolean", where));
+                else it.hidesWhenCarried = hides->AsBool();
+            }
+            doc.items.push_back(it);
         }
-        if (r.ReadString(*lamp, "entities.lamp", "startSocket", doc.lampStartSocket, true) && FindById(doc.sockets, doc.lampStartSocket, SocketId) == nullptr) {
-            r.Error(std::format("entities.lamp.startSocket: socket '{}' does not exist", doc.lampStartSocket));
+    }
+    // Sockets accept only items that exist; powered circuits name an item and a socket that accepts it, and
+    // their initial state must match where the item starts.
+    for (const SocketSpec& s : doc.sockets) {
+        for (const std::string& a : s.accepts) {
+            bool exists = false;
+            for (const ItemSpec& it : doc.items) exists = exists || it.id == a;
+            if (!exists) r.Error(std::format("socket '{}': accepted item '{}' does not exist", s.name, a));
         }
-        if (r.ReadString(*lamp, "entities.lamp", "placeSocket", doc.lampPlaceSocket, true) && FindById(doc.sockets, doc.lampPlaceSocket, SocketId) == nullptr) {
-            r.Error(std::format("entities.lamp.placeSocket: socket '{}' does not exist", doc.lampPlaceSocket));
+    }
+    for (const CircuitSpec& c : doc.circuits) {
+        if (c.poweredByItem.empty() && c.poweredBySocket.empty()) continue;
+        const ItemSpec* it = nullptr;
+        for (const ItemSpec& candidate : doc.items) {
+            if (candidate.id == c.poweredByItem) it = &candidate;
         }
-        if (!doc.lampStartSocket.empty() && doc.lampStartSocket == doc.lampPlaceSocket) r.Error("entities.lamp: startSocket and placeSocket must differ");
+        const SocketSpec* s = FindById(doc.sockets, c.poweredBySocket, SocketId);
+        if (it == nullptr) r.Error(std::format("circuit '{}' poweredBy: item '{}' does not exist", c.id, c.poweredByItem));
+        if (s == nullptr) r.Error(std::format("circuit '{}' poweredBy: socket '{}' does not exist", c.id, c.poweredBySocket));
+        if (it != nullptr && s != nullptr) {
+            if (std::find(s->accepts.begin(), s->accepts.end(), it->id) == s->accepts.end()) {
+                r.Error(std::format("circuit '{}' poweredBy: socket '{}' does not accept item '{}'", c.id, s->name, it->id));
+            }
+            const bool startsThere = it->startSocket == s->name;
+            if (c.on != startsThere) {
+                r.Error(std::format("circuit '{}' poweredBy: 'on' must be {} because item '{}' starts {} socket '{}'", c.id, startsThere ? "true" : "false", it->id,
+                                    startsThere ? "in" : "outside", s->name));
+            }
+        }
     }
     if (const json::Value* threat = section("threat")) {
         if (r.ReadString(*threat, "entities.threat", "body", doc.threatBody, true)) requireObject(doc.threatBody, "entities.threat.body", "box", true);
@@ -645,36 +829,61 @@ void ParseEntities(Reader& r, const json::Value& root, Document& doc) {
             requireMarker(o.aim->target, ("object '" + o.id + "' aim.target").c_str());
         }
     }
-    // Objectives (spec §15, §16): one "exit" entry names the marker the player must reach with the
-    // lamp; the phases before it (lamp acquired, placed, retrieved) come from the lamp entity.
+    // Objectives (spec §15, §16): an ordered list of steps; each step's id becomes the phase name once
+    // it is complete, and its text is the objective line while it is pending.
     const json::Value* objectives = root.Get("objectives");
     if (objectives == nullptr || !objectives->IsArray()) {
         r.Error("objectives: missing array");
         return;
     }
-    std::size_t exits = 0;
+    if (objectives->Size() > r.Limits().maxSteps) {
+        r.Error(std::format("objectives: {} steps exceed the limit of {}", objectives->Size(), r.Limits().maxSteps));
+        return;
+    }
+    if (objectives->Size() == 0) r.Error("objectives: at least one step is required");
+    std::set<std::string> seen;
     for (std::size_t i = 0; i < objectives->Size(); ++i) {
         const json::Value& v = *objectives->At(i);
-        const std::string where = std::format("objectives[{}]", i);
         if (!v.IsObject()) {
-            r.Error(where + ": must be an object");
+            r.Error(std::format("objectives[{}]: must be an object", i));
             continue;
         }
-        std::string id;
-        std::string kind;
-        r.ReadString(v, where.c_str(), "id", id, true);
-        if (!r.ReadString(v, where.c_str(), "kind", kind, true)) continue;
-        if (kind != "exit") {
-            r.Error(std::format("{}: unknown kind '{}' (known: exit)", where, kind));
+        StepSpec st;
+        if (!r.ReadId(v, "objectives", i, seen, st.id)) continue;
+        if (st.id == "introduction") r.Error("objectives: 'introduction' is the implicit first phase, not a step id");
+        const std::string where = "objective '" + st.id + "'";
+        const char* w = where.c_str();
+        if (!r.ReadString(v, w, "kind", st.kind, true)) continue;
+        r.ReadString(v, w, "text", st.text, true);
+        auto requireItem = [&](const std::string& id, const char* field) -> const ItemSpec* {
+            for (const ItemSpec& it : doc.items) {
+                if (it.id == id) return &it;
+            }
+            r.Error(std::format("{}: {} '{}' does not exist", where, field, id));
+            return nullptr;
+        };
+        if (st.kind == "take") {
+            if (r.ReadString(v, w, "item", st.item, true)) requireItem(st.item, "item");
+        } else if (st.kind == "place") {
+            const ItemSpec* it = r.ReadString(v, w, "item", st.item, true) ? requireItem(st.item, "item") : nullptr;
+            if (r.ReadString(v, w, "socket", st.socket, true)) {
+                const SocketSpec* s = FindById(doc.sockets, st.socket, SocketId);
+                if (s == nullptr) r.Error(std::format("{}: socket '{}' does not exist", where, st.socket));
+                else if (it != nullptr && std::find(s->accepts.begin(), s->accepts.end(), it->id) == s->accepts.end()) {
+                    r.Error(std::format("{}: socket '{}' does not accept item '{}'", where, st.socket, it->id));
+                }
+            }
+        } else if (st.kind == "reach") {
+            if (r.ReadString(v, w, "marker", st.marker, true)) requireMarker(st.marker, w);
+            r.ReadNumber(v, w, "radius", st.radius, false, 0.1f, 10.0f);
+            if (r.ReadString(v, w, "requires", st.requiresItem, false)) requireItem(st.requiresItem, "required item");
+        } else {
+            r.Error(std::format("{}: unknown kind '{}' (take, place, reach)", where, st.kind));
             continue;
         }
-        if (++exits > 1) {
-            r.Error(where + ": only one exit objective is allowed");
-            continue;
-        }
-        if (r.ReadString(v, where.c_str(), "marker", doc.exitMarker, true)) requireMarker(doc.exitMarker, (where + ".marker").c_str());
-        r.ReadNumber(v, where.c_str(), "radius", doc.exitRadius, false, 0.1f, 10.0f);
+        doc.steps.push_back(st);
     }
+    if (!r.ReadString(root, "document", "objectiveComplete", doc.objectiveComplete, false)) doc.objectiveComplete = "Complete";
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -699,12 +908,13 @@ TwoRoomLevel BuildLevel(const Document& doc, std::string_view sourceName, std::u
     }
     for (const MaterialSpec& m : doc.materials) {
         if (m.material.type != MaterialType::Emitter) continue;
+        level.emitterCircuits.emplace_back(materialIndex[m.id], m.circuit);
         for (const CircuitSpec& c : doc.circuits) {
             if (c.id == m.circuit && !c.on) s.SetEmitterOn(materialIndex[m.id], false);
         }
     }
     level.circuits.clear();
-    for (const CircuitSpec& c : doc.circuits) level.circuits.push_back({c.id, c.on});
+    for (const CircuitSpec& c : doc.circuits) level.circuits.push_back({c.id, c.on, c.poweredByItem, c.poweredBySocket});
     level.sockets = doc.sockets;
 
     auto marker = [&](const std::string& id) { return FindById(doc.markers, id, MarkerId); };
@@ -714,25 +924,57 @@ TwoRoomLevel BuildLevel(const Document& doc, std::string_view sourceName, std::u
     const MarkerSpec* checkCam = marker(doc.mirrorCheckCamera);
     const MarkerSpec* aimAt = marker(doc.mirrorAimAt);
     const MarkerSpec* start = marker(doc.playerStart);
-    const SocketSpec* startSocket = socket(doc.lampStartSocket);
-    const SocketSpec* placeSocket = socket(doc.lampPlaceSocket);
 
     level.threatPath = path->points;
     level.threatSpeed = path->speed;
     level.threatCheckPosition = threatPark->position;
-    if (!doc.exitMarker.empty()) {
-        level.hasExit = true;
-        level.exitPosition = marker(doc.exitMarker)->position;
-        level.exitRadius = doc.exitRadius;
-    }
     level.mirrorCheckCamera = {checkCam->position, checkCam->hasYaw ? checkCam->yaw : 0.0f, 0.0f};
     level.playerStart = {start->position, start->hasYaw ? start->yaw : 0.0f, 0.0f};
-    level.floorSocket = *startSocket;
-    level.shelfSocket = *placeSocket;
-    level.lampMaterial = materialIndex[doc.lampMaterial];
-    level.lampFaceOffset = doc.lampFaceOffset;
-    const PoseSpec lampPose{startSocket->position, startSocket->yaw, 0.0f};
     const PoseSpec threatPose{threatPark->position, 0.0f, 0.0f};
+
+    // Items: their level records first (the object loop places their bodies at the start sockets).
+    for (const ItemSpec& it : doc.items) {
+        LevelItem item;
+        item.id = it.id;
+        item.text = it.text;
+        item.hasLight = !it.light.empty();
+        item.lightMaterial = item.hasLight ? materialIndex.at(it.light) : 0;
+        item.faceOffset = it.faceOffset;
+        item.startSocket = it.startSocket;
+        item.hidesWhenCarried = it.hidesWhenCarried;
+        level.items.push_back(item);
+    }
+    auto itemOfObject = [&](const std::string& objectId, bool& isHousing, bool& isFace, bool& isBody) -> LevelItem* {
+        isHousing = isFace = isBody = false;
+        for (std::size_t i = 0; i < doc.items.size(); ++i) {
+            const ItemSpec& it = doc.items[i];
+            if (it.housing == objectId) isHousing = true;
+            else if (it.face == objectId) isFace = true;
+            else if (it.object == objectId) isBody = true;
+            else continue;
+            return &level.items[i];
+        }
+        return nullptr;
+    };
+    auto itemPose = [&](const LevelItem& item) {
+        const SocketSpec* sock = socket(item.startSocket);
+        return PoseSpec{sock->position, sock->yaw, 0.0f};
+    };
+    // Objective steps with their markers resolved.
+    for (const StepSpec& st : doc.steps) {
+        ObjectiveStep step;
+        step.id = st.id;
+        step.kind = st.kind;
+        step.item = st.item;
+        step.socket = st.socket;
+        step.marker = st.marker;
+        step.radius = st.radius;
+        step.requiresItem = st.requiresItem;
+        step.text = st.text;
+        if (!st.marker.empty()) step.markerPosition = marker(st.marker)->position;
+        level.steps.push_back(step);
+    }
+    level.objectiveCompleteText = doc.objectiveComplete;
 
     for (const ObjectSpec& o : doc.objects) {
         const std::uint32_t mat = materialIndex.at(o.material);
@@ -749,16 +991,67 @@ TwoRoomLevel BuildLevel(const Document& doc, std::string_view sourceName, std::u
                 }
             }
         } else if (o.kind == "door_leaf") {
-            level.door = AddDoorLeaf(s, o.id, o.leaf, mat);
-            id = level.door.id;
+            LevelDoor door;
+            door.handle = AddDoorLeaf(s, o.id, o.leaf, mat);
+            for (const DoorEntitySpec& entity : doc.doors) {
+                if (entity.object == o.id) {
+                    door.id = entity.id;
+                    door.locked = entity.locked;
+                    door.opensWithCircuit = entity.opensWithCircuit;
+                }
+            }
+            level.doors.push_back(door);
+            id = door.handle.id;
         } else if (o.kind == "emitter_rect") {
             id = AddRectangleEmitter(s, o.id, o.width, o.height, o.position, o.facing, mat);
+        } else if (o.kind == "fan") {
+            // Hub and blades about the axis at angle 0; the world rotates them while the circuit is on.
+            LevelFan fan;
+            fan.id = o.id;
+            fan.centre = *o.centre;
+            fan.axis = o.fan.axis;
+            fan.rpm = o.fan.rpm;
+            fan.circuit = o.fan.circuit;
+            const Vec3 axis = o.fan.axis;
+            const Vec3 u = std::fabs(axis.y) < 0.5f ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};  // A radial reference perpendicular to the axis.
+            const Vec3 v = math::Cross(axis, u);
+            auto frame = [&](Vec3 radial, Vec3 tangent, Vec3 offset) {
+                Mat4 m = Mat4::Identity();
+                m.m[0][0] = radial.x; m.m[1][0] = radial.y; m.m[2][0] = radial.z;     // Local x -> radial.
+                m.m[0][1] = tangent.x; m.m[1][1] = tangent.y; m.m[2][1] = tangent.z;  // Local y -> tangent.
+                m.m[0][2] = axis.x; m.m[1][2] = axis.y; m.m[2][2] = axis.z;           // Local z -> axis.
+                m.m[0][3] = offset.x; m.m[1][3] = offset.y; m.m[2][3] = offset.z;
+                return m;
+            };
+            const float hubHalf = o.fan.hubRadius;
+            fan.hubLocal = frame(u, v, {0.0f, 0.0f, 0.0f});
+            const MeshId hubMesh = s.AddMesh(MakeBox(o.id + "_hub", {hubHalf, hubHalf, o.fan.bladeThickness * 1.5f}));
+            fan.hub = s.AddInstance(o.id + "_hub", hubMesh, Mat4::Translation(fan.centre) * fan.hubLocal, mat);
+            const float halfLength = (o.fan.radius - o.fan.hubRadius) * 0.5f;
+            const MeshId bladeMesh = s.AddMesh(MakeBox(o.id + "_blade", {halfLength, o.fan.bladeWidth * 0.5f, o.fan.bladeThickness * 0.5f}));
+            for (std::uint32_t k = 0; k < o.fan.blades; ++k) {
+                const float angle = 2.0f * math::kPi * static_cast<float>(k) / static_cast<float>(o.fan.blades);
+                const Vec3 radial = u * std::cos(angle) + v * std::sin(angle);
+                const Vec3 tangent = math::Cross(axis, radial);
+                const Mat4 local = frame(radial, tangent, radial * (o.fan.hubRadius + halfLength));
+                fan.bladeLocal.push_back(local);
+                fan.blades.push_back(s.AddInstance(std::format("{}_blade{}", o.id, k), bladeMesh, Mat4::Translation(fan.centre) * local, mat));
+            }
+            level.fans.push_back(fan);
+            single = false;
         } else if (o.kind == "box") {
-            if (o.id == doc.lampHousing) {
-                level.lampHousingHalf = o.half;
+            bool isHousing = false, isFace = false, isBody = false;
+            LevelItem* item = itemOfObject(o.id, isHousing, isFace, isBody);
+            if (item != nullptr && isHousing) {
+                item->half = o.half;
                 const MeshId mesh = s.AddMesh(MakeBox(o.id, o.half));
-                id = s.AddInstance(o.id, mesh, LampHousingTransform(lampPose), mat);
-                level.lampHousing = id;
+                id = s.AddInstance(o.id, mesh, LampHousingTransform(itemPose(*item)), mat);
+                item->body = id;
+            } else if (item != nullptr && isBody) {
+                item->half = o.half;
+                const MeshId mesh = s.AddMesh(MakeBox(o.id, o.half));
+                id = s.AddInstance(o.id, mesh, ItemBodyTransform(itemPose(*item), o.half), mat);
+                item->body = id;
             } else if (o.id == doc.threatBody) {
                 const MeshId mesh = s.AddMesh(MakeBox(o.id, o.half));
                 id = s.AddInstance(o.id, mesh, ThreatBodyTransform(threatPose), mat);
@@ -803,15 +1096,42 @@ TwoRoomLevel BuildLevel(const Document& doc, std::string_view sourceName, std::u
                 }
             }
         } else if (o.kind == "quad") {
+            bool isHousing = false, isFace = false, isBody = false;
+            LevelItem* item = itemOfObject(o.id, isHousing, isFace, isBody);
             const MeshId mesh = s.AddMesh(MakeQuadXZ(o.id, o.half.x, o.half.z));
-            id = s.AddInstance(o.id, mesh, LampFaceTransform(lampPose, doc.lampFaceOffset), mat);
-            if (o.id == doc.lampFace) level.lampFace = id;
+            const PoseSpec pose = item != nullptr ? itemPose(*item) : PoseSpec{};
+            id = s.AddInstance(o.id, mesh, LampFaceTransform(pose, item != nullptr ? item->faceOffset : 0.1f), mat);
+            if (item != nullptr && isFace) item->face = id;
         }
         if (single && o.collider) level.colliders.push_back(id);
         if (single && o.id == doc.hallFloor) level.hallFloorId = id;
     }
     (void)aimAt;
     level.hallCheckPoint = level.threatCheckPosition;
+
+    // The proof's singular fields mirror the first door and the lit item (the world's current code paths).
+    if (!level.doors.empty()) level.door = level.doors.front().handle;
+    for (const LevelItem& item : level.items) {
+        if (!item.hasLight) continue;
+        level.lampHousing = item.body;
+        level.lampFace = item.face;
+        level.lampMaterial = item.lightMaterial;
+        level.lampFaceOffset = item.faceOffset;
+        level.lampHousingHalf = item.half;
+        level.floorSocket = *socket(item.startSocket);
+        for (const SocketSpec& sock : doc.sockets) {
+            if (sock.name != item.startSocket && std::find(sock.accepts.begin(), sock.accepts.end(), item.id) != sock.accepts.end()) {
+                level.shelfSocket = sock;
+                break;
+            }
+        }
+        break;
+    }
+    if (!level.steps.empty() && level.steps.back().kind == "reach") {
+        level.hasExit = true;
+        level.exitPosition = level.steps.back().markerPosition;
+        level.exitRadius = level.steps.back().radius;
+    }
 
     // Static description: the camera at the mirror check position and the static proof's expectations.
     d.camera.position = level.mirrorCheckCamera.position + Vec3{0.0f, 1.6f, 0.0f};

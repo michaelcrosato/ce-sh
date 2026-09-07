@@ -16,7 +16,9 @@
 
 namespace lc {
 
-inline constexpr std::uint32_t kSceneSchemaVersion = 1;
+// Schema 2 (M6): lists of doors and items, sockets that name the items they accept, circuits
+// powered by an item in a socket, the fan object kind, and the objective as an ordered step list.
+inline constexpr std::uint32_t kSceneSchemaVersion = 2;
 
 // "Reasonable input-size limits" (spec §16). A file exceeding any of them is rejected with the limit named.
 struct SceneFileLimits {
@@ -28,6 +30,10 @@ struct SceneFileLimits {
     std::uint32_t maxPaths = 32;
     std::uint32_t maxPathPoints = 256;
     std::uint32_t maxMarkers = 128;
+    std::uint32_t maxDoors = 32;
+    std::uint32_t maxItems = 16;
+    std::uint32_t maxSteps = 32;
+    std::uint32_t maxFanBlades = 12;
     float minDimension = 1e-4f;      // Smallest slab/box/quad/opening dimension in metres.
     float maxDimension = 1000.0f;
     float maxCoordinate = 10000.0f;  // Absolute bound of every position component.

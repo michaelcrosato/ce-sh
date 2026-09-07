@@ -24,6 +24,10 @@ Mat4 LampFaceTransform(const PoseSpec& pose, float faceOffset) {
     return PoseTransform(pose) * Mat4::Translation({0.0f, kLampBaseOffset, -faceOffset}) * QuadFacing({0.0f, 0.0f, -1.0f});
 }
 
+Mat4 ItemBodyTransform(const PoseSpec& pose, Vec3 half) {
+    return Mat4::Translation(pose.position + Vec3{0.0f, half.y, 0.0f}) * Mat4::RotationY(pose.yaw);
+}
+
 Mat4 ThreatBodyTransform(const PoseSpec& pose) {
     return Mat4::Translation(pose.position + Vec3{0.0f, 0.6f, 0.0f}) * Mat4::RotationY(pose.yaw);
 }

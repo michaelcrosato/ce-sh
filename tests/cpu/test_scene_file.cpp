@@ -78,8 +78,33 @@ LC_TEST(scene_file_two_room_loads_and_matches_the_proof_layout) {
     LC_CHECK_EQ(level.threatBody.value, FindInstance(s, "threat_body")->id.value);
     LC_CHECK_EQ(level.lampHousing.value, FindInstance(s, "lamp_housing")->id.value);
     LC_CHECK_EQ(level.lampFace.value, FindInstance(s, "lamp_face")->id.value);
+    // Schema 2 lists: one door, one lit item, the four steps of the proof; the singular fields mirror them.
+    LC_REQUIRE(level.doors.size() == 1u);
+    LC_CHECK_EQ(level.doors[0].id, std::string("door"));
+    LC_CHECK_EQ(level.doors[0].handle.id.value, level.door.id.value);
+    LC_CHECK(!level.doors[0].locked);
+    LC_REQUIRE(level.items.size() == 1u);
+    LC_CHECK_EQ(level.items[0].id, std::string("lamp"));
+    LC_CHECK(level.items[0].hasLight);
+    LC_CHECK_EQ(level.items[0].body.value, level.lampHousing.value);
+    LC_CHECK_EQ(level.items[0].face.value, level.lampFace.value);
+    LC_CHECK_EQ(level.items[0].lightMaterial, level.lampMaterial);
+    LC_CHECK_EQ(level.items[0].startSocket, std::string("floor_a"));
+    LC_REQUIRE(level.steps.size() == 4u);
+    LC_CHECK_EQ(level.steps[0].id, std::string("lamp_acquired"));
+    LC_CHECK_EQ(level.steps[0].kind, std::string("take"));
+    LC_CHECK_EQ(level.steps[1].socket, std::string("shelf"));
+    LC_CHECK_EQ(level.steps[3].kind, std::string("reach"));
+    LC_CHECK_EQ(level.steps[3].requiresItem, std::string("lamp"));
+    LC_CHECK_NEAR(level.steps[3].markerPosition.x, 0.9f, 1e-6f);
+    LC_CHECK(level.hasExit);
+    LC_CHECK_NEAR(level.exitRadius, 0.8f, 1e-6f);
+    LC_CHECK_EQ(level.objectiveCompleteText, std::string("You made it out"));
+    LC_CHECK(level.fans.empty());
     // Sockets, path, markers.
     LC_CHECK_EQ(level.sockets.size(), std::size_t{2});
+    LC_CHECK_EQ(level.sockets[1].accepts.size(), std::size_t{1});
+    LC_CHECK_EQ(level.sockets[1].text, std::string("shelf"));
     LC_CHECK_EQ(level.floorSocket.name, std::string("floor_a"));
     LC_CHECK_EQ(level.shelfSocket.name, std::string("shelf"));
     LC_CHECK_NEAR(level.shelfSocket.position.x, 4.25f, 1e-6f);
@@ -125,7 +150,7 @@ LC_TEST(scene_file_rejects_every_class_of_problem_with_a_named_message) {
             for (const std::string& e : r.errors) std::printf("    error: %s\n", e.c_str());
         }
     };
-    expectError(Patch(golden, "\"schema\": 1", "\"schema\": 2"), "schema");
+    expectError(Patch(golden, "\"schema\": 2", "\"schema\": 3"), "schema");
     expectError(golden + "x", "JSON");
     expectError(Patch(golden, "\"id\": \"crate\", \"kind\": \"box\"", "\"id\": \"floor\", \"kind\": \"box\""), "duplicate id 'floor'");
     expectError(Patch(golden, "\"material\": \"crate\"}", "\"material\": \"missing\"}"), "material 'missing' does not exist");
@@ -136,13 +161,54 @@ LC_TEST(scene_file_rejects_every_class_of_problem_with_a_named_message) {
     expectError(Patch(golden, "\"centre\": 1.2, \"width\": 0.9", "\"centre\": 0.3, \"width\": 0.9"), "leaves no wall");
     expectError(Patch(golden, "\"facing\": [0.0, -1.0, 0.0], \"material\": \"fixture_a\"", "\"facing\": [0.0, -0.5, 0.5], \"material\": \"fixture_a\""), "axis directions");
     expectError(Patch(golden, "\"start\": \"player_start\"", "\"start\": \"nowhere\""), "marker 'nowhere' does not exist");
-    expectError(Patch(golden, "\"kind\": \"exit\", \"marker\": \"exit\"", "\"kind\": \"portal\", \"marker\": \"exit\""), "unknown kind 'portal'");
-    expectError(Patch(golden, "\"kind\": \"exit\", \"marker\": \"exit\"", "\"kind\": \"exit\", \"marker\": \"nowhere\""), "marker 'nowhere' does not exist");
-    expectError(Patch(golden, "{\"id\": \"escape\", \"kind\": \"exit\", \"marker\": \"exit\", \"radius\": 0.8}",
-                      "{\"id\": \"escape\", \"kind\": \"exit\", \"marker\": \"exit\", \"radius\": 0.8}, {\"id\": \"again\", \"kind\": \"exit\", \"marker\": \"exit\"}"),
-                "only one exit");
+    expectError(Patch(golden, "\"kind\": \"reach\", \"marker\": \"exit\"", "\"kind\": \"portal\", \"marker\": \"exit\""), "unknown kind 'portal'");
+    expectError(Patch(golden, "\"kind\": \"reach\", \"marker\": \"exit\"", "\"kind\": \"reach\", \"marker\": \"nowhere\""), "marker 'nowhere' does not exist");
+    expectError(Patch(golden, "\"kind\": \"place\", \"item\": \"lamp\", \"socket\": \"shelf\"", "\"kind\": \"place\", \"item\": \"lamp\", \"socket\": \"nowhere\""),
+                "socket 'nowhere' does not exist");
+    expectError(Patch(golden, "{\"id\": \"door\", \"object\": \"door\"}", "{\"id\": \"door\", \"object\": \"crate\"}"), "must be a door_leaf");
+    expectError(Patch(golden, "{\"id\": \"door\", \"object\": \"door\"}", "{\"id\": \"door\", \"object\": \"crate\"}"), "needs a door entity");
+    expectError(Patch(golden, "\"accepts\": [\"lamp\"], \"text\": \"shelf\"", "\"accepts\": [\"fuse\"], \"text\": \"shelf\""), "accepted item 'fuse' does not exist");
+    expectError(Patch(golden, "\"accepts\": [\"lamp\"], \"text\": \"shelf\"", "\"accepts\": [\"fuse\"], \"text\": \"shelf\""), "does not accept item 'lamp'");
+    expectError(Patch(golden, "{\"id\": \"b\", \"on\": false}", "{\"id\": \"b\", \"on\": true, \"poweredBy\": {\"item\": \"lamp\", \"socket\": \"shelf\"}}"), "'on' must be false");
+    const std::string crate = "{\"id\": \"crate\", \"kind\": \"box\", \"half\": [0.4, 0.4, 0.4], \"centre\": [0.8, 0.4, 3.0], \"material\": \"crate\"}";
+    expectError(Patch(golden, crate, "{\"id\": \"crate\", \"kind\": \"fan\", \"centre\": [0.8, 1.5, 3.0], \"axis\": [1, 0, 0], \"radius\": 0.5, \"blades\": 4, \"bladeWidth\": 0.2, "
+                                     "\"bladeThickness\": 0.03, \"hubRadius\": 0.6, \"rpm\": 40, \"circuit\": \"a\", \"material\": \"crate\"}"),
+                "hubRadius");
     expectError(Patch(golden, "\"speed\": 1.2", "\"speed\": 0"), "'speed'");
     expectError(Patch(golden, "\"id\": \"floor\"", "\"id\": \"Floor\""), "lowercase");
+}
+
+LC_TEST(scene_file_builds_a_fan_from_its_specification) {
+    const std::string golden = TwoRoomText();
+    const std::string crate = "{\"id\": \"crate\", \"kind\": \"box\", \"half\": [0.4, 0.4, 0.4], \"centre\": [0.8, 0.4, 3.0], \"material\": \"crate\"}";
+    const std::string fan = "{\"id\": \"crate\", \"kind\": \"fan\", \"centre\": [0.8, 1.5, 3.0], \"axis\": [1, 0, 0], \"radius\": 0.5, \"blades\": 4, \"bladeWidth\": 0.2, "
+                            "\"bladeThickness\": 0.03, \"hubRadius\": 0.1, \"rpm\": 40, \"circuit\": \"a\", \"material\": \"crate\"}";
+    const lc::SceneFileResult r = lc::ParseSceneFile(Patch(golden, crate, fan), "fan");
+    for (const std::string& e : r.errors) std::printf("    error: %s\n", e.c_str());
+    LC_REQUIRE(r.level.has_value());
+    const lc::TwoRoomLevel& level = *r.level;
+    LC_REQUIRE(level.fans.size() == 1u);
+    const lc::LevelFan& f = level.fans[0];
+    LC_CHECK_EQ(f.id, std::string("crate"));
+    LC_CHECK_EQ(f.blades.size(), std::size_t{4});
+    LC_CHECK_EQ(f.bladeLocal.size(), std::size_t{4});
+    LC_CHECK_EQ(f.circuit, std::string("a"));
+    LC_CHECK_NEAR(f.rpm, 40.0f, 1e-6f);
+    LC_CHECK_NEAR(f.axis.x, 1.0f, 1e-6f);
+    // 31 instances with the crate replaced by a hub and four blades.
+    LC_CHECK_EQ(level.description.scene.Instances().size(), std::size_t{35});
+    LC_CHECK(FindInstance(level.description.scene, "crate_hub") != nullptr);
+    LC_CHECK(FindInstance(level.description.scene, "crate_blade3") != nullptr);
+    // Blades sit between the hub radius and the fan radius, in the plane perpendicular to the axis.
+    for (std::size_t k = 0; k < 4; ++k) {
+        const lc::math::Vec3 c = f.bladeLocal[k].TranslationPart();
+        LC_CHECK_NEAR(c.x, 0.0f, 1e-5f);
+        LC_CHECK_NEAR(lc::math::Length(c), 0.1f + 0.2f, 1e-5f);
+    }
+    // Moving fan parts are not collision solids unless the file says so.
+    bool hubCollides = false;
+    for (const lc::InstanceId id : level.colliders) hubCollides = hubCollides || id.value == f.hub.value;
+    LC_CHECK(!hubCollides);
 }
 
 LC_TEST(scene_file_limits_and_asset_root_containment) {

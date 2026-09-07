@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "name": "two_room",
   "units": "metres",
   "description": "Spec section 4 first proof: Room A (equipment) with a fixture, crate, portable lamp, and a door; an L-shaped hall with an emergency fixture; Room B (inspection) with a sink block, an angled flat mirror, and a lamp shelf. Walls 0.15 m, ceiling 2.8 m. No baked lighting.",
@@ -56,8 +56,8 @@
     {"id": "player_hand_r", "kind": "box", "half": [0.05, 0.04, 0.08], "material": "player_suit", "collider": false}
   ],
   "sockets": [
-    {"id": "floor_a", "position": [3.0, 0.0, 0.9], "yaw": -1.5707963},
-    {"id": "shelf", "position": [4.25, 0.95, 10.25], "yaw": -1.5707963}
+    {"id": "floor_a", "position": [3.0, 0.0, 0.9], "yaw": -1.5707963, "accepts": ["lamp"], "text": "floor socket"},
+    {"id": "shelf", "position": [4.25, 0.95, 10.25], "yaw": -1.5707963, "accepts": ["lamp"], "text": "shelf"}
   ],
   "paths": [
     {"id": "threat_route", "points": [[4.6, 0.0, 1.9], [7.7, 0.0, 1.9]], "speed": 1.2, "mode": "ping_pong"}
@@ -70,12 +70,20 @@
   ],
   "entities": {
     "player": {"start": "player_start", "torso": "player_torso", "handLeft": "player_hand_l", "handRight": "player_hand_r"},
-    "door": {"object": "door"},
-    "lamp": {"housing": "lamp_housing", "face": "lamp_face", "faceOffset": 0.101, "material": "lamp_face", "startSocket": "floor_a", "placeSocket": "shelf"},
+    "doors": [
+      {"id": "door", "object": "door"}
+    ],
+    "items": [
+      {"id": "lamp", "text": "lamp", "housing": "lamp_housing", "face": "lamp_face", "light": "lamp_face", "faceOffset": 0.101, "startSocket": "floor_a"}
+    ],
     "threat": {"body": "threat_body", "head": "threat_head", "path": "threat_route", "parkAt": "threat_check"},
     "mirror": {"object": "mirror", "checkCamera": "mirror_check_camera", "aimAt": "threat_check", "hallFloor": "floor"}
   },
   "objectives": [
-    {"id": "escape", "kind": "exit", "marker": "exit", "radius": 0.8}
-  ]
+    {"id": "lamp_acquired", "kind": "take", "item": "lamp", "text": "Find the lamp and pick it up"},
+    {"id": "lamp_placed", "kind": "place", "item": "lamp", "socket": "shelf", "text": "Carry the lamp to the shelf in the inspection room"},
+    {"id": "lamp_retrieved", "kind": "take", "item": "lamp", "text": "Check the mirror, then take the lamp back"},
+    {"id": "escaped", "kind": "reach", "marker": "exit", "radius": 0.8, "requires": "lamp", "text": "Return to the exit in the equipment room with the lamp"}
+  ],
+  "objectiveComplete": "You made it out"
 }

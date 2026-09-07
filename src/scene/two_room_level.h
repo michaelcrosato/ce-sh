@@ -20,13 +20,63 @@ struct PoseSpec {
 
 struct SocketSpec {
     std::string name;
-    math::Vec3 position;      // Lamp base position when placed.
-    float yaw = 0.0f;         // Lamp facing.
+    math::Vec3 position;      // Item base position when placed.
+    float yaw = 0.0f;         // Item facing.
+    std::vector<std::string> accepts;  // Item ids this socket takes (schema 2).
+    std::string text;         // Player-facing name ("shelf", "fuse box").
 };
 
 struct CircuitState {
     std::string id;
     bool on = true;
+    // Schema 2: a circuit powered by an item sitting in a socket (the fuse) is on exactly when it is there.
+    std::string poweredByItem;
+    std::string poweredBySocket;
+};
+
+// Schema 2 entities (spec §5, §15): several doors, carried items, fans, and the objective's steps.
+struct LevelDoor {
+    std::string id;
+    DoorHandle handle;
+    bool locked = false;              // Ignores the interaction key.
+    std::string opensWithCircuit;     // Opens when this circuit turns on (the exit door).
+};
+
+struct LevelItem {
+    std::string id;
+    std::string text;                 // Display name ("lamp", "fuse").
+    InstanceId body;                  // The carried box (lamp housing, fuse body).
+    InstanceId face;                  // Lit items: the emitting quad.
+    bool hasLight = false;
+    std::uint32_t lightMaterial = 0;  // Lit items: the emitter material index.
+    float faceOffset = 0.101f;        // Lit items: face distance from the fixture origin along -Z.
+    math::Vec3 half;                  // Body box half extents.
+    std::string startSocket;
+    bool hidesWhenCarried = false;    // Parked inside the player's torso while carried (a pocketed fuse).
+};
+
+struct LevelFan {
+    std::string id;
+    InstanceId hub;
+    std::vector<InstanceId> blades;
+    std::vector<math::Mat4> bladeLocal;  // Blade transforms relative to the hub at angle 0.
+    math::Mat4 hubLocal;
+    math::Vec3 centre;
+    math::Vec3 axis;                  // Unit rotation axis.
+    float rpm = 0.0f;
+    std::string circuit;              // Turns while this circuit is on.
+};
+
+struct ObjectiveStep {
+    std::string id;                   // The phase name once completed.
+    std::string kind;                 // take, place, reach.
+    std::string item;                 // take, place.
+    std::string socket;               // place.
+    std::string marker;               // reach.
+    math::Vec3 markerPosition;        // reach: resolved marker.
+    float radius = 0.8f;              // reach.
+    std::string requiresItem;         // reach: the item must be held.
+    std::string text;                 // The objective line while this step is pending.
 };
 
 struct TwoRoomLevel {
@@ -36,8 +86,15 @@ struct TwoRoomLevel {
     std::vector<CircuitState> circuits;   // Initial circuit states from the file.
     std::vector<SocketSpec> sockets;      // Every interaction socket (floorSocket and shelfSocket are two of them).
     std::vector<InstanceId> colliders;    // Instances that block movement (M5 collision), from the file's collider flags.
+    // Schema 2 lists (the fields below them mirror the first door and the lit item for the proof's code paths).
+    std::vector<LevelDoor> doors;
+    std::vector<LevelItem> items;
+    std::vector<LevelFan> fans;
+    std::vector<ObjectiveStep> steps;
+    std::string objectiveCompleteText;
+    std::vector<std::pair<std::uint32_t, std::string>> emitterCircuits;  // Emitter material index -> circuit id.
 
-    DoorHandle door;                // Room A door into the hall.
+    DoorHandle door;                // The first door (Room A into the hall in the proof).
     std::uint32_t lampMaterial = 0; // Emitter material of the lamp face.
     InstanceId lampHousing;
     InstanceId lampFace;
@@ -79,9 +136,13 @@ inline constexpr float kLampBaseOffset = 0.05f;
 TwoRoomLevel BuildTwoRoomLevel();
 inline constexpr const char* kTwoRoomSceneFile = "scenes/two_room.json";
 
+using Level = TwoRoomLevel;  // The struct outgrew its name in M6; both names are the same type.
+
 // Fixture transforms shared by the scene builder and the game: housing and face from one pose.
 math::Mat4 LampHousingTransform(const PoseSpec& pose);
 math::Mat4 LampFaceTransform(const PoseSpec& pose, float faceOffset);
+// A plain item's body resting on its socket (the box's bottom on the socket point).
+math::Mat4 ItemBodyTransform(const PoseSpec& pose, math::Vec3 half);
 math::Mat4 ThreatBodyTransform(const PoseSpec& pose);
 math::Mat4 ThreatHeadTransform(const PoseSpec& pose);
 // Player body parts from the feet pose (yaw only: the body does not pitch with the view).
