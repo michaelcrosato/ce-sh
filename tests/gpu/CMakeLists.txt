@@ -39,6 +39,23 @@ add_test(NAME gpu_t06_lamp_off COMMAND LastCircuit --scene two_room --replay "${
 # Motion frame by frame: one tick per frame in raw mode; TLAS rebuilds must match the frames with motion.
 add_test(NAME gpu_replay_motion_tlas_rebuilds COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t06_door_light.json" --mode raw --frames 120 --validate --headless)
 
+# M4: stable real-time image (spec §13, §19 T12). Denoised mode: one sample per frame, NRD REBLUR, compose.
+# The recomposed raw mean must meet the reference tolerances (the split is lossless); the denoised image
+# has its own documented tolerance (docs/TESTS.md).
+add_test(NAME gpu_denoised_split_lossless COMMAND LastCircuit --scene t09_rect_light --mode denoised --frames 64 --validate --headless)
+add_test(NAME gpu_denoised_box_static COMMAND LastCircuit --scene t08_box --mode denoised --frames 120 --validate --headless)
+add_test(NAME gpu_denoised_mirror_box COMMAND LastCircuit --scene mirror_box --mode denoised --frames 64 --validate --headless)
+add_test(NAME gpu_denoised_metals_room COMMAND LastCircuit --scene metals_room --mode denoised --frames 64 --validate --headless)
+add_test(NAME gpu_denoised_blackout_reset COMMAND LastCircuit --scene t08_box --mode denoised --blackout-at-frame 60 --frames 62 --validate --headless)
+add_test(NAME gpu_denoised_motion_lamp COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_lamp_motion.json" --mode denoised --frames 400 --validate --headless)
+add_test(NAME gpu_denoised_motion_mirror_threat COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_mirror_motion.json" --mode denoised --frames 740 --validate --headless)
+add_test(NAME gpu_denoised_trail_lag COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_mirror_motion.json" --mode denoised --frames 930 --validate --headless)
+add_test(NAME gpu_denoised_resize_test COMMAND LastCircuit --scene rt_boxes --mode denoised --resize-test --vsync off)
+add_test(NAME gpu_denoised_scaled_resize_test COMMAND LastCircuit --scene rt_boxes --mode denoised --internal 960x540 --resize-test --vsync off)
+# Benchmark command (spec §21): a short headless run must produce a complete report.
+add_test(NAME gpu_benchmark_smoke COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_mirror_motion.json" --mode denoised
+         --benchmark-seconds 2 --warmup-seconds 0.5 --report "${CMAKE_BINARY_DIR}/artifacts/benchmark_smoke.json" --headless)
+
 # Cross-run comparisons (patch means within max(relative tolerance, 3 standard errors)).
 # Same path family for every estimator: with N hits the NEE-based estimators (mis, light) also
 # capture direct light at the N-th surface, which BSDF-only can reach only as an (N+1)-th hit.
@@ -61,6 +78,9 @@ set(_lc_gpu_tests
     gpu_t10_furnace_r05 gpu_t10_furnace_r35 gpu_t10_furnace_r70 gpu_t10_furnace_closed_form gpu_metals_room_positive
     gpu_two_room_static_mirror gpu_t05_mirror_threat_reference gpu_t05_mirror_threat_raw gpu_t05_mirror_threat_absent
     gpu_t06_door_open gpu_t06_door_closed gpu_t06_lamp_on_shelf gpu_t06_lamp_off gpu_replay_motion_tlas_rebuilds
+    gpu_denoised_split_lossless gpu_denoised_box_static gpu_denoised_mirror_box gpu_denoised_metals_room gpu_denoised_blackout_reset
+    gpu_denoised_motion_lamp gpu_denoised_motion_mirror_threat gpu_denoised_trail_lag gpu_denoised_resize_test gpu_denoised_scaled_resize_test
+    gpu_benchmark_smoke
     gpu_t08_box_strategies_agree gpu_t07_agrees_with_higher_sample_reference gpu_t08_box_depth_truncation_report)
 set_tests_properties(${_lc_gpu_tests} PROPERTIES SKIP_RETURN_CODE 3 LABELS gpu TIMEOUT 900)
-set_tests_properties(gpu_resize_test PROPERTIES LABELS "gpu;window" RUN_SERIAL TRUE)
+set_tests_properties(gpu_resize_test gpu_denoised_resize_test gpu_denoised_scaled_resize_test PROPERTIES LABELS "gpu;window" RUN_SERIAL TRUE)

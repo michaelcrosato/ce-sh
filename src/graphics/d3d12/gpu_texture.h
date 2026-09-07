@@ -32,6 +32,8 @@ public:
 
     // Records a transition barrier when the state changes.
     void Transition(ID3D12GraphicsCommandList* list, D3D12_RESOURCE_STATES newState);
+    // For callers that batch their own barriers: records nothing, only updates the tracked state.
+    void SetState(D3D12_RESOURCE_STATES state) { state_ = state; }
 
     ReadbackPlan PlanReadback(Device& device) const;
 

@@ -133,4 +133,37 @@ std::uint32_t Scene::TotalTriangles() const {
     return total;
 }
 
+std::uint64_t Scene::ContentHash() const {
+    std::uint64_t h = 0xCBF29CE484222325ull;
+    auto mix = [&h](const void* data, std::size_t size) {
+        const auto* bytes = static_cast<const std::uint8_t*>(data);
+        for (std::size_t i = 0; i < size; ++i) {
+            h ^= bytes[i];
+            h *= 0x100000001B3ull;
+        }
+    };
+    for (const Mesh& m : meshes_) {
+        mix(m.data.name.data(), m.data.name.size());
+        mix(m.data.positions.data(), m.data.positions.size() * sizeof(math::Vec3));
+        mix(m.data.indices.data(), m.data.indices.size() * sizeof(std::uint32_t));
+    }
+    for (const Material& mat : materials_) {
+        mix(mat.name.data(), mat.name.size());
+        const std::uint32_t type = static_cast<std::uint32_t>(mat.type);
+        mix(&type, sizeof(type));
+        mix(&mat.reflectance, sizeof(mat.reflectance));
+        mix(&mat.radiance, sizeof(mat.radiance));
+        const std::uint8_t on = mat.emitterOn ? 1 : 0;
+        mix(&on, 1);
+        mix(&mat.roughness, sizeof(mat.roughness));
+    }
+    for (const Instance& inst : instances_) {
+        mix(inst.name.data(), inst.name.size());
+        mix(&inst.mesh.value, sizeof(inst.mesh.value));
+        mix(&inst.materialIndex, sizeof(inst.materialIndex));
+        mix(inst.objectToWorld.m, sizeof(inst.objectToWorld.m));
+    }
+    return h;
+}
+
 }  // namespace lc

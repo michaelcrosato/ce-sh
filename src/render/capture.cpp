@@ -4,6 +4,8 @@
 #include "core/log.h"
 #include "platform/files.h"
 
+#include <algorithm>
+
 namespace lc {
 
 bool WriteCapture(const std::filesystem::path& dir, const std::string& baseName, const CaptureImages& images,
@@ -17,6 +19,11 @@ bool WriteCapture(const std::filesystem::path& dir, const std::string& baseName,
 
     bool ok = files::WriteBinaryFile(pngPath, EncodePng(images.display));
     ok = files::WriteBinaryFile(pfmPath, EncodePfm(images.linear)) && ok;
+    const bool hasRaw = !images.rawMean.pixels.empty();
+    const std::filesystem::path rawPath = dir / (baseName + "_raw.pfm");
+    if (hasRaw) {
+        ok = files::WriteBinaryFile(rawPath, EncodePfm(images.rawMean)) && ok;  // Mean of the recomposed raw samples (denoised mode).
+    }
 
     JsonWriter j;
     j.BeginObject();
@@ -43,6 +50,8 @@ bool WriteCapture(const std::filesystem::path& dir, const std::string& baseName,
     j.Value(meta.outputHeight);
     j.EndArray();
     j.Field("reconstruction", meta.reconstruction);
+    j.Field("framesSinceHistoryReset", images.framesSinceReset);
+    j.Field("historyResets", meta.historyResets);
     j.Field("adapter", meta.adapter);
     j.Field("driver", meta.driver);
     j.Field("buildCommit", meta.buildCommit);
@@ -55,6 +64,7 @@ bool WriteCapture(const std::filesystem::path& dir, const std::string& baseName,
     j.BeginObject();
     j.Field("display", pngPath.filename().string());
     j.Field("linear", pfmPath.filename().string());
+    if (hasRaw) j.Field("rawMean", rawPath.filename().string());
     j.EndObject();
     j.Key("gpuTimingsMs");
     j.BeginObject();
@@ -69,6 +79,29 @@ bool WriteCapture(const std::filesystem::path& dir, const std::string& baseName,
         log::Info("Capture written: {} (+ .pfm, .json) {}x{}", pngPath.string(), images.width, images.height);
     }
     return ok;
+}
+
+ImageRgba8 CropImage(const ImageRgba8& image, std::uint32_t x, std::uint32_t y, std::uint32_t width, std::uint32_t height) {
+    ImageRgba8 out;
+    if (image.width == 0 || image.height == 0 || x >= image.width || y >= image.height) {
+        return out;
+    }
+    const std::uint32_t w = std::min(width == 0 ? image.width : width, image.width - x);
+    const std::uint32_t h = std::min(height == 0 ? image.height : height, image.height - y);
+    out.width = w;
+    out.height = h;
+    out.pixels.resize(static_cast<std::size_t>(w) * h * 4);
+    for (std::uint32_t row = 0; row < h; ++row) {
+        const std::uint8_t* src = image.pixels.data() + (static_cast<std::size_t>(y + row) * image.width + x) * 4;
+        std::copy(src, src + static_cast<std::size_t>(w) * 4, out.pixels.data() + static_cast<std::size_t>(row) * w * 4);
+    }
+    return out;
+}
+
+bool WriteSequenceFrame(const std::filesystem::path& dir, const std::string& fileName, const ImageRgba8& image) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return files::WriteBinaryFile(dir / fileName, EncodePng(image));
 }
 
 }  // namespace lc

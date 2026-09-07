@@ -3,7 +3,7 @@ add_library(lc_render_contracts INTERFACE)
 target_sources(lc_render_contracts INTERFACE
     FILE_SET HEADERS
     BASE_DIRS "${CMAKE_SOURCE_DIR}/src"
-    FILES gpu_layouts.h view_mode.h
+    FILES gpu_layouts.h nrd_settings.h view_mode.h
 )
 target_include_directories(lc_render_contracts INTERFACE "${CMAKE_SOURCE_DIR}/src")
 
@@ -12,11 +12,13 @@ if(WIN32)
     add_library(lc_render STATIC
         capture.cpp
         capture.h
+        nrd_denoiser.cpp
+        nrd_denoiser.h
         render_snapshot.h
         renderer.cpp
         renderer.h
         scene_gpu.cpp
         scene_gpu.h
     )
-    target_link_libraries(lc_render PUBLIC lc_graphics lc_scene lc_render_contracts)
+    target_link_libraries(lc_render PUBLIC lc_graphics lc_scene lc_render_contracts NRD)
 endif()

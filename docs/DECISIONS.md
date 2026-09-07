@@ -142,6 +142,48 @@ Format: date, issue, evidence, decision, consequence, rollback.
 
 - Decision: Room B's fixture is on an off circuit so the portable lamp is the dominant change there; the hall emergency fixture carries about a third of Room A's fixture power so the mirror image stays readable; the lamp face is small and bright (about a tenth of Room A's fixture power). Evidence captures of the dark rooms use `--exposure` 2..6 (display only; radiance checks read the linear image).
 
+## D-028 (2026-09-06) NRD, ShaderMake, and MathLib as pinned git submodules built from source
+
+- Issue: the spec (§3, §13, M4) directs an NRD integration; NRD's own CMake downloads ShaderMake, MathLib, and (through ShaderMake) a DXC release at configure time.
+- Decision: the three repositories are git submodules at the commits NRD 4.17.3 pins (`external/`); `cmake/LcNrd.cmake` switches every fetch off, hands ShaderMake the SDK's `dxc.exe`, builds NRD as a static library with DXIL shaders only, and pins the normal/roughness encodings the shaders expect.
+- Evidence: configure and build offline-equivalent (no download step in the logs); 31 DXIL blobs compiled by the SDK DXC; `NrdDenoiser` verifies the encodings at start-up.
+- Consequence: NRD's proprietary RTX SDK license enters the dependency record with its attribution and redistribution terms (DEPENDENCIES.md) for the owner's review.
+
+## D-029 (2026-09-06) REBLUR diffuse+specular as the single NRD method
+
+- Decision: one denoiser (REBLUR_DIFFUSE_SPECULAR) suited to the signals we have (1 spp, one lobe per pixel, no probabilistic lobe split, no checkerboard); no SH variants, no RELAX, no SIGMA.
+- Evidence: 7 dispatches per frame, about 1 ms in the Debug shader build at 1280x720; the analytic and box scenes within the documented tolerances.
+
+## D-030 (2026-09-06) Primary Surface Replacement with a static mirror plane
+
+- Decision: the guided trace describes the first non-mirror surface to the denoiser (virtual position on the primary ray, normal and motion reflected through the mirror planes in reverse order, mirror reflectance folded into the material factors). Mirror planes are taken as static between frames.
+- Evidence: the mirrored threat's guide motion equals its reflected translation within 6.5e-5 m; the mirror image tracks the moving threat with zero measured lag.
+- Rollback: a moving mirror needs the previous plane (NRD's `worldPrevToWorldMatrix` or a per-pixel previous-plane reflection).
+
+## D-031 (2026-09-06) One global sub-pixel jitter per frame in denoised mode
+
+- Decision: raw and reference modes keep per-pixel random jitter; the denoised mode applies one Halton(2,3) offset to every pixel and passes it to NRD. A temporal filter cannot be told per-pixel random offsets.
+
+## D-032 (2026-09-06) World-space motion from the instance transforms
+
+- Decision: motion vectors are `prevObjectToWorld * p - objectToWorld * p` of the hit's object-space point (exact for rigid motion, zero for static objects, camera motion excluded); NRD reprojects with the previous camera matrices. No 2D or 2.5D motion.
+- Evidence: static pixels report exactly zero; the carried lamp reports its translation while the camera moves.
+
+## D-033 (2026-09-06) Material factors stored, not recomputed
+
+- Decision: the guided trace stores the demodulation factors it used; compose multiplies the denoised signals by the stored values. Divide and multiply always agree, whatever NRD's factor formula does.
+
+## D-034 (2026-09-06) History bound and blur settings
+
+- Decision: 30 frames of main history (0.5 s at 60 Hz), 6 fast; no pre-accumulation blur (it biased lighting gradients by 7–9 % permanently); maximum blur radius 30 px (shrinks with accumulation); the diffuse hit distance mixes in the light-sample distance where direct light dominates and uses it alone when the continuation leaves the scene.
+- Evidence: the sharpest analytic case moved from -7 / -9 % to -3.6 / -4.0 %, inside the 5 % tolerance chosen beforehand; the closed box is within 1.5 %.
+- Rollback: `--prepass-radius`, `--blur-radius`, `--history-frames` expose the values for the T12 review with a person.
+
+## D-035 (2026-09-06) Trail lag as the automated temporal metric
+
+- Decision: per-frame patch luminance and entity-pixel counts, a departure frame, a settled value 20–32 frames after departure, and the lag to reach 80 % of the step; limit 6 frames (100 ms). Invalid series (never leaves, too short, re-entry, no contrast) fail with a reason instead of passing.
+- Consequence: the metric measures the reflected threat's silhouette specifically (spec §19: no global averages).
+
 ## D-013 (2026-09-06) Repository workflow for this session
 
 - Decision: work on branch `m0-m1-bootstrap` with small commits; nothing is pushed; `build/` and `artifacts/` are ignored. The owner decides on merging.

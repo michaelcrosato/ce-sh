@@ -25,7 +25,8 @@ struct CaptureMetadata {
     std::uint32_t renderHeight = 0;
     std::uint32_t outputWidth = 0;
     std::uint32_t outputHeight = 0;
-    std::string reconstruction = "none";
+    std::string reconstruction = "none";  // "none" or "nrd-reblur-<version>" (denoised mode).
+    std::uint64_t historyResets = 0;
     std::string adapter;
     std::string driver;
     std::string buildCommit;
@@ -40,5 +41,11 @@ struct CaptureMetadata {
 // Writes <dir>/<baseName>.png, .pfm, and .json. Returns false when any file failed.
 bool WriteCapture(const std::filesystem::path& dir, const std::string& baseName, const CaptureImages& images,
                   const CaptureMetadata& meta);
+
+// Sub-rectangle of a display image, clamped to its bounds (width/height 0 = the whole image).
+ImageRgba8 CropImage(const ImageRgba8& image, std::uint32_t x, std::uint32_t y, std::uint32_t width, std::uint32_t height);
+
+// One frame of a sequence capture (spec §18): a lossless PNG of the (cropped) display image.
+bool WriteSequenceFrame(const std::filesystem::path& dir, const std::string& fileName, const ImageRgba8& image);
 
 }  // namespace lc

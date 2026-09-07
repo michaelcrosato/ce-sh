@@ -1,7 +1,11 @@
 # lc_app_options: command-line handling, portable so it can be unit-tested without a GPU.
 add_library(lc_app_options STATIC
+    benchmark.cpp
+    benchmark.h
     options.cpp
     options.h
+    temporal_checks.cpp
+    temporal_checks.h
 )
 target_link_libraries(lc_app_options PUBLIC lc_core lc_render_contracts)
 

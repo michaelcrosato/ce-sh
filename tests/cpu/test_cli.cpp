@@ -60,11 +60,27 @@ LC_TEST(cli_flags_and_defaults) {
 }
 
 LC_TEST(app_options_parse_scene_view_and_flags) {
-    const auto parsed = lc::ParseAppOptions(Args({"--scene", "rt_boxes", "--view", "ids", "--headless", "--frames", "2"}));
+    const auto parsed = lc::ParseAppOptions(Args({"--scene", "rt_boxes", "--mode", "diag", "--view", "ids", "--headless", "--frames", "2"}));
     LC_REQUIRE(parsed.options.has_value());
     LC_CHECK_EQ(parsed.options->scene, std::string("rt_boxes"));
     LC_CHECK(parsed.options->view == lc::ViewMode::InstanceIds);
+    LC_CHECK(parsed.options->viewSet);
     LC_CHECK(parsed.options->headless);
+    // A view needs a pass that can draw it: diag draws identities, denoised draws overlays.
+    LC_CHECK(!lc::ParseAppOptions(Args({"--mode", "raw", "--view", "ids"})).options.has_value());
+    LC_CHECK(!lc::ParseAppOptions(Args({"--mode", "denoised", "--view", "ids"})).options.has_value());
+    LC_CHECK(!lc::ParseAppOptions(Args({"--mode", "diag", "--view", "history"})).options.has_value());
+    const auto denoised = lc::ParseAppOptions(Args({"--mode", "denoised", "--view", "history", "--history-frames", "12", "--internal", "1280x720"}));
+    LC_REQUIRE(denoised.options.has_value());
+    LC_CHECK(denoised.options->mode == lc::AppRenderMode::Denoised);
+    LC_CHECK(denoised.options->view == lc::ViewMode::History);
+    LC_CHECK_EQ(denoised.options->historyFrames, 12u);
+    LC_CHECK_EQ(denoised.options->internalWidth, 1280u);
+    LC_CHECK_EQ(denoised.options->internalHeight, 720u);
+    LC_CHECK(!lc::ParseAppOptions(Args({"--mode", "raw", "--history-frames", "12"})).options.has_value());
+    LC_CHECK(!lc::ParseAppOptions(Args({"--internal", "1280"})).options.has_value());
+    LC_CHECK(!lc::ParseAppOptions(Args({"--benchmark-seconds", "3"})).options.has_value());  // Needs --replay and --report.
+    LC_CHECK(!lc::ParseAppOptions(Args({"--capture-crop", "1,2,0,4", "--capture-sequence", "seq"})).options.has_value());
     LC_CHECK(!parsed.options->validate);
     LC_CHECK_EQ(parsed.options->frames, 2u);
     LC_CHECK_EQ(parsed.options->width, 1280u);

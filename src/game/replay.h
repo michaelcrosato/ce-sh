@@ -1,5 +1,6 @@
 // Deterministic input replay (spec §4, §21). A replay file holds run-length encoded input segments
-// and checks that --validate evaluates when the simulation is stopped at a given tick.
+// and checks that --validate evaluates when the simulation is stopped at a given tick (or, for
+// frame-by-frame runs, at the final tick).
 #pragma once
 
 #include "core/math/vec.h"
@@ -20,20 +21,42 @@ struct InputSegment {
 };
 
 // Checks reference entities by name; the application resolves names to stable ids.
+//   "hit"            the pixel of `point` (or `pixel`) reports `entity` as the first non-mirror surface.
+//   "not_visible"    no pixel reports `entity` directly (zero mirror bounces).
+//   "patch_positive" / "patch_dark" / "patch_zero" / "patch_ratio"   luminance patches on the linear image
+//                    (raw or reference mean; in denoised mode the recomposed raw mean).
+//   "denoised_patch_positive" / "denoised_patch_dark"   the same on the denoised image (denoised mode only).
+//   "motion"         the pixel reports `entity` and its guide motion equals the entity's previous minus current
+//                    position within `tolerance` metres; `reflected` mirrors the expectation across the level's
+//                    mirror plane (the pixel sees the entity through the mirror).
+//   "static_motion"  the pixel reports `entity` and its guide motion is exactly zero.
+//   "trail_lag"      per-frame patch statistics from `fromFrame` to the final frame; after `entity` leaves the
+//                    patch the denoised luminance must settle within `maxLagFrames` frames (T12).
 struct ReplayCheck {
     std::uint64_t tick = 0;
-    std::string kind;                        // "hit", "not_visible", "patch_positive", "patch_dark", "patch_zero", "patch_ratio".
+    std::string kind;
     std::string description;
     std::optional<math::Vec3> point;         // World point projected at validation time.
     std::optional<math::Vec2> pixel;         // Or a normalized pixel.
-    std::string entity;                      // "hit": the entity whose id the first non-mirror hit must carry; "not_visible": must not appear outside the mirror.
+    std::string entity;
     std::optional<math::Vec3> otherPoint;    // "patch_ratio".
     float minimum = 1e-3f;                   // "patch_positive": mean luminance must exceed.
     float maximum = 1e-3f;                   // "patch_dark": mean luminance must stay below.
-    float tolerance = 1e-6f;                 // "patch_zero".
+    float tolerance = 1e-6f;                 // "patch_zero"; "motion": metres.
     float ratioFactor = 1.2f;                // "patch_ratio".
     std::uint32_t halfSize = 2;
+    bool reflected = false;                  // "motion".
+    std::uint32_t maxLagFrames = 6;          // "trail_lag": 100 ms at 60 Hz.
+    float settleFraction = 0.8f;             // "trail_lag": fraction of the final change that counts as settled.
+    std::uint64_t fromFrame = 0;             // "trail_lag": first recorded frame.
 };
+
+inline constexpr const char* kReplayCheckKinds[] = {"hit",    "not_visible",   "patch_positive",          "patch_dark",
+                                                    "patch_zero", "patch_ratio", "denoised_patch_positive", "denoised_patch_dark",
+                                                    "motion", "static_motion", "trail_lag"};
+
+// True for kinds that need statistics from every frame, not only the final one.
+inline bool IsPerFrameCheck(const ReplayCheck& check) { return check.kind == "trail_lag"; }
 
 struct Replay {
     std::uint32_t version = 1;

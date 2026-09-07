@@ -61,6 +61,29 @@ struct alignas(16) IntegratorConstants {
 };
 static_assert(sizeof(IntegratorConstants) == 32, "IntegratorConstants must match layouts.hlsli");
 
+// Root constant buffer b2 for the guided trace, compose, and upscale passes (denoised mode).
+struct alignas(16) GuideConstants {
+    float jitterPixels[2] = {};
+    std::uint32_t outputSize[2] = {};
+    float hitDistParams[3] = {3.0f, 0.1f, 20.0f};  // nrd::ReblurHitDistanceParameters defaults (metres).
+    float denoisingRange = 500.0f;
+    std::uint32_t flags = 0;
+    std::uint32_t historyFrames = 30;
+    float exposure = 1.0f;
+    std::uint32_t viewMode = 0;
+};
+static_assert(sizeof(GuideConstants) == 48, "GuideConstants must match layouts.hlsli");
+static_assert(offsetof(GuideConstants, hitDistParams) == 16);
+static_assert(offsetof(GuideConstants, flags) == 32);
+static_assert(offsetof(GuideConstants, viewMode) == 44);
+
+inline constexpr std::uint32_t kGuideFlagGlobalJitter = 1u;
+inline constexpr std::uint32_t kGuideFlagReset = 2u;
+inline constexpr std::uint32_t kGuideFlagOverlay = 4u;
+inline constexpr std::uint32_t kGuideFlagValidation = 8u;
+inline constexpr std::uint32_t kMaterialIdDiffuse = 0u;
+inline constexpr std::uint32_t kMaterialIdConductor = 1u;
+
 inline constexpr std::uint32_t kStrategyMis = 0;
 inline constexpr std::uint32_t kStrategyLight = 1;
 inline constexpr std::uint32_t kStrategyBsdf = 2;
@@ -154,7 +177,7 @@ inline constexpr std::uint32_t kStatsZeroPdf = 3;
 inline constexpr std::uint32_t kStatsCount = 8;
 
 // layout_probe.hlsl output size and trailing sentinel.
-inline constexpr std::uint32_t kLayoutProbeCount = 30;
+inline constexpr std::uint32_t kLayoutProbeCount = 35;
 inline constexpr std::uint32_t kLayoutProbeSentinel = 0xC0FFEEu;
 
 }  // namespace lc::gpu

@@ -1,6 +1,8 @@
 #include "app/application.h"
 
+#include "app/benchmark.h"
 #include "app/environment_report.h"
+#include "app/temporal_checks.h"
 #include "core/build_info.h"
 #include "core/clock.h"
 #include "core/error.h"
@@ -19,11 +21,15 @@
 #include "scene/builtin_scenes.h"
 #include "scene/two_room_level.h"
 
+#define PSAPI_VERSION 2
+#include <psapi.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <format>
+#include <map>
 #include <memory>
 #include <thread>
 
@@ -64,9 +70,14 @@ RenderMode ToRenderMode(AppRenderMode mode) {
         case AppRenderMode::Diagnostic: return RenderMode::Diagnostic;
         case AppRenderMode::Raw: return RenderMode::Raw;
         case AppRenderMode::Reference: return RenderMode::Reference;
+        case AppRenderMode::Denoised: return RenderMode::Denoised;
     }
     return RenderMode::Raw;
 }
+
+// Documented tolerance for the denoised image against an analytic patch (docs/TESTS.md, T12):
+// the denoiser is biased by design; the recomposed raw mean is held to the reference tolerance.
+constexpr float kDenoisedRelativeTolerance = 0.05f;
 
 Strategy ToStrategy(AppStrategy s) {
     switch (s) {
@@ -291,7 +302,8 @@ int Application::RunRender() {
         std::unique_ptr<Window> window;
         std::unique_ptr<gfx::SwapChain> swapChain;
         const std::string modeLabel = mode == RenderMode::Diagnostic ? std::format("DIAGNOSTIC: {}", ViewModeName(options_.view))
-                                                                     : std::format("{}", RenderModeName(mode));
+                                      : (mode == RenderMode::Denoised && options_.viewSet) ? std::format("denoised [{}]", ViewModeName(options_.view))
+                                                                                             : std::format("{}", RenderModeName(mode));
         if (!options_.headless) {
             WindowDesc wd;
             wd.title = std::format(L"Last Circuit [{}] {}", Utf8ToWide(modeLabel), Utf8ToWide(sceneName));
@@ -307,7 +319,11 @@ int Application::RunRender() {
 
         const std::uint32_t initialWidth = window ? window->ClientWidth() : options_.width;
         const std::uint32_t initialHeight = window ? window->ClientHeight() : options_.height;
-        Renderer renderer(*device, queue, initialWidth, initialHeight);
+        const bool scaledOutput = options_.internalWidth != 0 && options_.internalHeight != 0;
+        Renderer renderer(*device, queue, scaledOutput ? options_.internalWidth : initialWidth, scaledOutput ? options_.internalHeight : initialHeight);
+        if (scaledOutput) {
+            renderer.SetOutputSize(initialWidth, initialHeight);
+        }
         renderer.SetScene(scene);
         renderer.SetMode(mode);
         IntegratorSettings integrator;
@@ -319,6 +335,15 @@ int Application::RunRender() {
         integrator.samplesPerFrame = options_.samplesPerFrame;
         integrator.targetSamples = mode == RenderMode::Reference ? options_.spp : 0;
         renderer.SetIntegrator(integrator);
+        DenoiserSettings denoiserSettings;
+        denoiserSettings.historyFrames = options_.historyFrames;
+        denoiserSettings.diffusePrepassRadius = options_.prepassRadius;
+        denoiserSettings.maxBlurRadius = options_.blurRadius;
+        denoiserSettings.antiFirefly = options_.antiFirefly;
+        denoiserSettings.validationOverlay = options_.validationOverlay;
+        denoiserSettings.resetOnSourceChange = options_.resetOnSourceChange;
+        renderer.SetDenoiser(denoiserSettings);
+        const std::uint32_t tickRate = replay ? replay->tickRate : 60;
 
         // Simulation setup.
         game::Simulation simulation(replay ? replay->tickRate : 60);
@@ -335,7 +360,7 @@ int Application::RunRender() {
 
         std::uint32_t targetFrames = options_.frames;
         if (targetFrames == 0 && options_.headless && mode != RenderMode::Reference) {
-            targetFrames = options_.validate ? 2 : 1;
+            targetFrames = mode == RenderMode::Denoised ? 32 : (options_.validate ? 2 : 1);  // Denoised: a bounded history to look at.
         }
         if (options_.resizeTest) {
             targetFrames = kFramesPerResizeStep * (static_cast<std::uint32_t>(std::size(kResizeSteps)) + 1);
@@ -365,6 +390,64 @@ int Application::RunRender() {
         Camera camera = world ? world->CameraAt(1.0f) : staticDesc->camera;
         camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
         std::string lastInteraction;
+
+        // Per-frame readback for frame sequences (spec §18) and trail-lag checks (§19): a full GPU wait
+        // per frame, test paths only. Motion checks need the transforms of the rendered image before
+        // CommitRenderedFrame replaces the previous ones.
+        struct TrailRecord {
+            std::size_t checkIndex = 0;
+            std::uint32_t entityId = 0;
+            std::vector<double> luminance;
+            std::vector<std::uint32_t> occupied;
+            std::vector<std::uint64_t> frames;
+        };
+        std::vector<TrailRecord> trailRecords;
+        bool keepRenderedInstances = false;
+        if (replay && world) {
+            for (std::size_t i = 0; i < replay->checks.size(); ++i) {
+                const game::ReplayCheck& c = replay->checks[i];
+                if (game::IsPerFrameCheck(c) && !frozenReplay) {
+                    trailRecords.push_back(TrailRecord{i, world->StableIdOf(c.entity), {}, {}, {}});
+                }
+                if (c.kind == "motion" || c.kind == "static_motion") keepRenderedInstances = true;
+            }
+        }
+        const bool perFrameReadback = options_.captureSequence.has_value() || !trailRecords.empty();
+        std::vector<Instance> renderedInstances;
+        JsonWriter sequenceLog;
+        std::uint32_t sequenceFrames = 0;
+        if (options_.captureSequence) {
+            sequenceLog.BeginObject();
+            sequenceLog.Field("scene", sceneName);
+            sequenceLog.Field("mode", RenderModeName(mode));
+            sequenceLog.Field("replay", options_.replay ? options_.replay->string() : std::string());
+            sequenceLog.Key("crop");
+            sequenceLog.BeginArray();
+            sequenceLog.Value(options_.captureCrop.x);
+            sequenceLog.Value(options_.captureCrop.y);
+            sequenceLog.Value(options_.captureCrop.width);
+            sequenceLog.Value(options_.captureCrop.height);
+            sequenceLog.EndArray();
+            sequenceLog.Key("frames");
+            sequenceLog.BeginArray();
+        }
+
+        // Benchmark (spec §17 protocol): loop the replay, exclude the warm-up, record every frame's
+        // CPU and GPU time, then write the report. No per-frame readback, no validation.
+        const bool benchmark = options_.benchmarkSeconds > 0.0f;
+        std::vector<double> benchCpuMs;
+        std::vector<double> benchGpuMs;
+        std::map<std::string, std::pair<double, std::uint32_t>> benchPasses;
+        std::uint32_t benchWarmupFrames = 0;
+        std::uint32_t replayLoops = 0;
+        bool benchMeasuring = false;
+        auto benchStart = std::chrono::steady_clock::now();
+        auto measureStart = benchStart;
+        if (benchmark) {
+            targetFrames = 0;  // The measured duration ends the run.
+            log::Info("benchmark: {} s warm-up then {} s measured; replay '{}' ({} ticks) loops", options_.warmupSeconds, options_.benchmarkSeconds,
+                      options_.replay->string(), replay->LastTick() + 1);
+        }
 
         try {
         while (true) {
@@ -398,7 +481,11 @@ int Application::RunRender() {
                 if (ev.resized || swapChain->Width() != window->ClientWidth() || swapChain->Height() != window->ClientHeight()) {
                     if (!window->IsMinimized() && window->ClientWidth() > 0 && window->ClientHeight() > 0) {
                         swapChain->Resize(window->ClientWidth(), window->ClientHeight());
-                        renderer.Resize(window->ClientWidth(), window->ClientHeight());
+                        if (scaledOutput) {
+                            renderer.SetOutputSize(window->ClientWidth(), window->ClientHeight());  // The internal size stays fixed.
+                        } else {
+                            renderer.Resize(window->ClientWidth(), window->ClientHeight());
+                        }
                     }
                 }
                 window->ClearEvents();
@@ -436,6 +523,13 @@ int Application::RunRender() {
                         lastInteraction = targetName;
                     }
                 } else if (!frozenReplay) {
+                    if (benchmark && simulation.Tick() > replay->LastTick()) {
+                        world->Reset();  // Back to the start: a camera cut, so the temporal history is invalid.
+                        renderer.ResetHistory();
+                        simulation = game::Simulation(tickRate);
+                        ++replayLoops;
+                        log::Info("benchmark: replay loop {} restarts at frame {}", replayLoops, frameIndex);
+                    }
                     simulation.RunTicks(1, [&](std::uint64_t tick, float dt) { world->Tick(replay->InputAt(tick), dt); });
                     alpha = 1.0f;
                 }
@@ -445,11 +539,30 @@ int Application::RunRender() {
                 camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
             }
 
+            // Test hook (spec §19, reset correctness): every emitter off and an explicit history reset.
+            if (options_.blackoutAtFrame >= 0 && frameIndex == static_cast<std::uint32_t>(options_.blackoutAtFrame)) {
+                std::uint32_t switched = 0;
+                const std::vector<Material>& materials = scene.Materials();
+                for (std::uint32_t i = 0; i < materials.size(); ++i) {
+                    if (materials[i].type == MaterialType::Emitter && materials[i].emitterOn) {
+                        scene.SetEmitterOn(i, false);
+                        ++switched;
+                    }
+                }
+                renderer.ResetHistory();
+                log::Info("blackout before frame {}: {} emitter(s) switched off, history reset requested", frameIndex, switched);
+            }
+
             RenderSnapshot snapshot;
             snapshot.scene = &scene;
             snapshot.camera = camera;
             snapshot.frameIndex = frameIndex;
             snapshot.view = options_.view;
+            snapshot.overlay = options_.viewSet;
+            // NRD's time delta: the replay period when the world is stepped by ticks, wall time in a window, a nominal 60 Hz otherwise.
+            snapshot.frameDeltaMs = (world && !options_.play) ? 1000.0f / static_cast<float>(tickRate)
+                                    : (window && frameIndex > 0) ? static_cast<float>(realSeconds * 1000.0)
+                                                                 : 1000.0f / 60.0f;
 
             renderer.BeginFrame();
             renderer.RecordTrace(snapshot);
@@ -465,6 +578,82 @@ int Application::RunRender() {
                     break;
                 }
                 LC_CHECK_HR(hr);
+            }
+            if (keepRenderedInstances) {
+                renderedInstances = scene.Instances();  // The image just rendered: current and previous transforms.
+            }
+            if (perFrameReadback) {
+                const bool inSequence = options_.captureSequence && frameIndex >= options_.captureFrom &&
+                                        (options_.captureTo == 0 || frameIndex <= options_.captureTo) &&
+                                        (frameIndex - options_.captureFrom) % options_.captureEvery == 0;
+                bool trailWanted = false;
+                for (const TrailRecord& t : trailRecords) {
+                    trailWanted = trailWanted || frameIndex >= replay->checks[t.checkIndex].fromFrame;
+                }
+                if (inSequence || trailWanted) {
+                    const CaptureImages frameImages = renderer.Readback();
+                    for (TrailRecord& t : trailRecords) {
+                        const game::ReplayCheck& c = replay->checks[t.checkIndex];
+                        if (frameIndex < c.fromFrame) continue;
+                        PixelPoint p;
+                        if (c.point) {
+                            p = ProjectPoint(camera, frameImages.width, frameImages.height, *c.point);
+                        } else if (c.pixel) {
+                            p = PixelFromUv(frameImages.width, frameImages.height, c.pixel->x, c.pixel->y);
+                        }
+                        double lum = 0.0;
+                        std::uint32_t occupied = 0;
+                        if (p.visible) {
+                            const PatchStats s = ComputePatchStats(frameImages, p.x, p.y, c.halfSize);
+                            lum = Luminance(s.mean);
+                            const std::uint32_t x0 = p.x >= c.halfSize ? p.x - c.halfSize : 0;
+                            const std::uint32_t y0 = p.y >= c.halfSize ? p.y - c.halfSize : 0;
+                            const std::uint32_t x1 = std::min(frameImages.width - 1, p.x + c.halfSize);
+                            const std::uint32_t y1 = std::min(frameImages.height - 1, p.y + c.halfSize);
+                            for (std::uint32_t py = y0; py <= y1; ++py) {
+                                for (std::uint32_t px = x0; px <= x1; ++px) {
+                                    if (frameImages.HitAt(px, py).stableId == t.entityId) ++occupied;
+                                }
+                            }
+                        }
+                        t.luminance.push_back(lum);
+                        t.occupied.push_back(occupied);
+                        t.frames.push_back(frameIndex);
+                    }
+                    if (inSequence) {
+                        const ImageRgba8 crop = CropImage(frameImages.display, options_.captureCrop.x, options_.captureCrop.y,
+                                                          options_.captureCrop.width, options_.captureCrop.height);
+                        const std::string fileName = std::format("frame_{:05}.png", frameIndex);
+                        if (!WriteSequenceFrame(*options_.captureSequence, fileName, crop)) exitCode = kExitFailure;
+                        ++sequenceFrames;
+                        sequenceLog.BeginObject();
+                        sequenceLog.Field("frame", frameIndex);
+                        sequenceLog.Field("file", fileName);
+                        sequenceLog.Field("tick", static_cast<std::uint64_t>(simulation.Tick()));
+                        sequenceLog.Field("historyResets", renderer.HistoryResetCount());
+                        sequenceLog.Field("framesSinceReset", frameImages.framesSinceReset);
+                        if (world) {
+                            sequenceLog.Field("door", std::string(game::DoorStateName(world->GetDoor().State())));
+                            sequenceLog.Field("lampOn", world->GetLamp().IsOn());
+                            sequenceLog.Field("lamp", world->GetLamp().State() == game::LampState::Held ? std::string("held") : std::string(world->GetLamp().SocketName()));
+                            const math::Vec3 tp = world->GetThreat().Current().position;
+                            const math::Vec3 pp = world->GetPlayer().Current().position;
+                            sequenceLog.Key("threat");
+                            sequenceLog.BeginArray();
+                            sequenceLog.Value(static_cast<double>(tp.x));
+                            sequenceLog.Value(static_cast<double>(tp.y));
+                            sequenceLog.Value(static_cast<double>(tp.z));
+                            sequenceLog.EndArray();
+                            sequenceLog.Key("player");
+                            sequenceLog.BeginArray();
+                            sequenceLog.Value(static_cast<double>(pp.x));
+                            sequenceLog.Value(static_cast<double>(pp.y));
+                            sequenceLog.Value(static_cast<double>(pp.z));
+                            sequenceLog.EndArray();
+                        }
+                        sequenceLog.EndObject();
+                    }
+                }
             }
             scene.CommitRenderedFrame();
             ++frameIndex;
@@ -500,7 +689,10 @@ int Application::RunRender() {
                 if (frameIndex % kFramesPerResizeStep == kFramesPerResizeStep - 1) {
                     if (resizeStep > 0) {
                         const ResizeStep& s = kResizeSteps[resizeStep - 1];
-                        const bool followed = renderer.Width() == window->ClientWidth() && renderer.Height() == window->ClientHeight() &&
+                        // With a fixed internal size the presented (output) size must follow the window instead.
+                        const std::uint32_t followW = scaledOutput ? renderer.OutputWidth() : renderer.Width();
+                        const std::uint32_t followH = scaledOutput ? renderer.OutputHeight() : renderer.Height();
+                        const bool followed = followW == window->ClientWidth() && followH == window->ClientHeight() &&
                                               swapChain->Width() == window->ClientWidth() && swapChain->Height() == window->ClientHeight();
                         const bool reached = window->ClientWidth() == s.width && window->ClientHeight() == s.height;
                         log::Info("resize step {}: requested {}x{}, client {}x{}, renderer {}x{}, swap chain {}x{} -> {}", resizeStep, s.width,
@@ -516,6 +708,29 @@ int Application::RunRender() {
             }
 
             device->DrainInfoQueue();  // No-op when the message callback is active.
+            if (benchmark) {
+                const auto nowBench = std::chrono::steady_clock::now();
+                if (!benchMeasuring) {
+                    ++benchWarmupFrames;
+                    if (std::chrono::duration<double>(nowBench - benchStart).count() >= options_.warmupSeconds) {
+                        benchMeasuring = true;
+                        measureStart = nowBench;
+                        log::Info("benchmark: warm-up done after {} frames; measuring for {} s", benchWarmupFrames, options_.benchmarkSeconds);
+                    }
+                } else {
+                    benchCpuMs.push_back(cpuMs);
+                    const double gpuMs = FindTiming(renderer.LastTimings(), "frame_gpu");  // Two frames old (KI-005); a distribution does not mind.
+                    if (gpuMs > 0.0) benchGpuMs.push_back(gpuMs);
+                    for (const gfx::TimerResult& t : renderer.LastTimings()) {
+                        auto& acc = benchPasses[t.name];
+                        acc.first += t.milliseconds;
+                        ++acc.second;
+                    }
+                    if (std::chrono::duration<double>(nowBench - measureStart).count() >= options_.benchmarkSeconds) {
+                        break;
+                    }
+                }
+            }
             if (targetFrames != 0 && frameIndex >= targetFrames) {
                 break;
             }
@@ -554,10 +769,92 @@ int Application::RunRender() {
             if (world) {
                 log::Info("motion frames {} of {}; TLAS rebuilds {}", motionFrames, frameIndex, renderer.TlasRebuildCount());
             }
+            if (options_.captureSequence) {
+                sequenceLog.EndArray();
+                sequenceLog.Field("frameCount", sequenceFrames);
+                sequenceLog.Field("historyResets", renderer.HistoryResetCount());
+                sequenceLog.EndObject();
+                std::error_code ec;
+                std::filesystem::create_directories(*options_.captureSequence, ec);
+                if (files::WriteTextFile(*options_.captureSequence / "sequence.json", sequenceLog.Text() + "\n")) {
+                    log::Info("Frame sequence written: {} frame(s) in {} with sequence.json", sequenceFrames, options_.captureSequence->string());
+                } else {
+                    exitCode = kExitFailure;
+                }
+            }
+
+            if (benchmark) {
+                BenchmarkReport report;
+                report.buildCommit = build::kGitCommit;
+                report.buildDirty = build::kGitDirty;
+                report.buildConfig = build::kConfig;
+                report.scene = sceneName;
+                report.sceneContentHash = scene.ContentHash();
+                for (const auto& [name, hash] : renderer.ShaderHashes()) report.shaderHashes.push_back({name, hash});
+                report.denoiserVersion = mode == RenderMode::Denoised ? std::format("nrd-reblur-{}", Renderer::DenoiserVersion()) : "none";
+                report.replay = options_.replay->string();
+                report.replayTicks = replay->LastTick() + 1;
+                report.replayLoops = replayLoops;
+                report.adapter = WideToUtf8(device->AdapterDetails().description);
+                report.vendorId = device->AdapterDetails().vendorId;
+                report.deviceId = device->AdapterDetails().deviceId;
+                report.driver = device->AdapterDetails().driverVersion;
+                report.os = std::format("{} ({})", env.osVersion, env.osDisplayVersion);
+                report.mode = RenderModeName(mode);
+                report.renderWidth = renderer.Width();
+                report.renderHeight = renderer.Height();
+                report.outputWidth = swapChain ? swapChain->Width() : renderer.OutputWidth();
+                report.outputHeight = swapChain ? swapChain->Height() : renderer.OutputHeight();
+                report.maxHits = integrator.maxHits;
+                report.historyFrames = denoiserSettings.historyFrames;
+                report.antiFirefly = denoiserSettings.antiFirefly;
+                report.vsync = options_.vsync && swapChain != nullptr;
+                report.frameCap = false;
+                report.windowed = window != nullptr;
+                report.overlay = options_.viewSet;
+                report.warmupSeconds = std::chrono::duration<double>(measureStart - benchStart).count();
+                report.warmupFrames = benchWarmupFrames;
+                report.measuredSeconds = benchMeasuring ? std::chrono::duration<double>(std::chrono::steady_clock::now() - measureStart).count() : 0.0;
+                report.cpu = ComputeFrameTimeStatistics(benchCpuMs);
+                report.gpu = ComputeFrameTimeStatistics(benchGpuMs);
+                for (const auto& [name, acc] : benchPasses) {
+                    report.passNames.push_back(name);
+                    report.passAverageMs.push_back(acc.second ? acc.first / acc.second : 0.0);
+                }
+                device->UpdateVideoMemoryInfo();
+                report.videoMemoryBudget = device->Caps().videoMemoryBudget;
+                report.videoMemoryUsage = device->Caps().videoMemoryCurrentUsage;
+                PROCESS_MEMORY_COUNTERS pmc{};
+                pmc.cb = sizeof(pmc);
+                if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+                    report.processWorkingSet = pmc.WorkingSetSize;
+                    report.processPeakWorkingSet = pmc.PeakWorkingSetSize;
+                }
+                report.denoiserPoolBytes = renderer.DenoiserPoolBytes();
+                report.timestamp = Clock::TimestampIso8601();
+                log::Info("benchmark: {} measured frames over {:.1f} s ({} replay loop(s)); CPU avg {:.2f} / p95 {:.2f} / p99 {:.2f} / max {:.2f} ms; "
+                          "GPU avg {:.2f} / p95 {:.2f} / p99 {:.2f} / max {:.2f} ms; frames above 33.3 ms: {} (GPU), above 50 ms: {} (GPU)",
+                          report.cpu.count, report.measuredSeconds, replayLoops, report.cpu.averageMs, report.cpu.p95Ms, report.cpu.p99Ms, report.cpu.maxMs,
+                          report.gpu.averageMs, report.gpu.p95Ms, report.gpu.p99Ms, report.gpu.maxMs, report.gpu.above33Ms, report.gpu.above50Ms);
+                if (!benchMeasuring || report.cpu.count == 0) {
+                    log::Error("benchmark: the run ended before any measured frame");
+                    exitCode = kExitFailure;
+                } else if (files::WriteTextFile(*options_.report, report.ToJson())) {
+                    log::Info("Benchmark report written: {}", options_.report->string());
+                } else {
+                    exitCode = kExitFailure;
+                }
+            }
 
             std::optional<CaptureImages> images;
             if (options_.capture || options_.validate || options_.stats) {
                 images = renderer.Readback();
+            }
+            std::optional<CaptureImages> rawView;  // Denoised mode: the recomposed raw mean in place of the linear image.
+            if (images && mode == RenderMode::Denoised) {
+                rawView = *images;
+                rawView->linear = images->rawMean;
+                rawView->standardError = images->rawStandardError;
             }
 
             if (options_.capture && images) {
@@ -573,8 +870,10 @@ int Application::RunRender() {
                 meta.exposure = integrator.exposure;
                 meta.renderWidth = renderer.Width();
                 meta.renderHeight = renderer.Height();
-                meta.outputWidth = swapChain ? swapChain->Width() : renderer.Width();
-                meta.outputHeight = swapChain ? swapChain->Height() : renderer.Height();
+                meta.outputWidth = swapChain ? swapChain->Width() : renderer.OutputWidth();
+                meta.outputHeight = swapChain ? swapChain->Height() : renderer.OutputHeight();
+                meta.reconstruction = mode == RenderMode::Denoised ? std::format("nrd-reblur-{}", Renderer::DenoiserVersion()) : "none";
+                meta.historyResets = renderer.HistoryResetCount();
                 meta.adapter = WideToUtf8(device->AdapterDetails().description);
                 meta.driver = device->AdapterDetails().driverVersion;
                 meta.buildCommit = build::kGitCommit;
@@ -717,11 +1016,49 @@ int Application::RunRender() {
                     }
                     const std::vector<RadianceExpectation> none;
                     const std::vector<RadianceExpectation>& radianceExpectations = world ? none : staticDesc->radianceExpectations;
-                    for (const RadianceExpectation& r : radianceExpectations) {
-                        std::string detail;
-                        const bool ok = EvaluateRadianceExpectation(r, camera, *images, detail);
-                        log::Info("radiance expectation '{}': {} -> {}", r.description, detail, ok ? "PASS" : "FAIL");
-                        if (!ok) ++problems;
+                    if (mode == RenderMode::Denoised && options_.blackoutAtFrame >= 0) {
+                        // Reset correctness (spec §19): after the blackout and the explicit history reset, no
+                        // prior illumination may remain in the denoised image beyond two rendered frames.
+                        float maxDenoised = 0.0f;
+                        for (const float v : images->linear.pixels) maxDenoised = std::max(maxDenoised, std::fabs(v));
+                        float maxRaw = 0.0f;
+                        for (const float v : images->rawMean.pixels) maxRaw = std::max(maxRaw, std::fabs(v));
+                        const std::uint32_t framesAfter = frameIndex > static_cast<std::uint32_t>(options_.blackoutAtFrame) ? frameIndex - static_cast<std::uint32_t>(options_.blackoutAtFrame) : 0;
+                        const bool okDenoised = maxDenoised <= 1e-4f;
+                        const bool okRaw = maxRaw <= 1e-6f;
+                        log::Info("blackout reset check: {} frame(s) after the blackout, max denoised radiance {:.3e} (limit 1e-4), max raw mean {:.3e} (limit 1e-6), "
+                                  "{} history reset(s), {} frame(s) since reset -> {}",
+                                  framesAfter, maxDenoised, maxRaw, renderer.HistoryResetCount(), images->framesSinceReset, okDenoised && okRaw ? "PASS" : "FAIL");
+                        if (!okDenoised || !okRaw) ++problems;
+                        log::Info("scene radiance expectations skipped: the blackout switched every emitter off");
+                    } else if (mode == RenderMode::Denoised) {
+                        // The recomposed raw samples must meet the reference tolerances (the split and the
+                        // demodulation are lossless); the denoised image gets its own documented tolerance.
+                        const CaptureImages& rawImages = *rawView;
+                        CaptureImages denoisedView = *images;
+                        denoisedView.standardError.pixels.assign(denoisedView.standardError.pixels.size(), 0.0f);
+                        log::Info("denoised mode: {} frame(s) since the last history reset, {} reset(s), NRD {} dispatch(es), {:.1f} MiB of pool textures",
+                                  images->framesSinceReset, renderer.HistoryResetCount(), renderer.DenoiserDispatchCount(),
+                                  static_cast<double>(renderer.DenoiserPoolBytes()) / (1024.0 * 1024.0));
+                        for (const RadianceExpectation& r : radianceExpectations) {
+                            std::string detail;
+                            const bool okRaw = EvaluateRadianceExpectation(r, camera, rawImages, detail);
+                            log::Info("raw-mean expectation '{}': {} -> {}", r.description, detail, okRaw ? "PASS" : "FAIL");
+                            if (!okRaw) ++problems;
+                            RadianceExpectation d = r;
+                            d.relativeTolerance = std::max(r.relativeTolerance, kDenoisedRelativeTolerance);
+                            std::string detailDenoised;
+                            const bool okDenoised = EvaluateRadianceExpectation(d, camera, denoisedView, detailDenoised);
+                            log::Info("denoised expectation '{}': {} -> {}", r.description, detailDenoised, okDenoised ? "PASS" : "FAIL");
+                            if (!okDenoised) ++problems;
+                        }
+                    } else {
+                        for (const RadianceExpectation& r : radianceExpectations) {
+                            std::string detail;
+                            const bool ok = EvaluateRadianceExpectation(r, camera, *images, detail);
+                            log::Info("radiance expectation '{}': {} -> {}", r.description, detail, ok ? "PASS" : "FAIL");
+                            if (!ok) ++problems;
+                        }
                     }
                 }
 
@@ -760,7 +1097,90 @@ int Application::RunRender() {
                             }
                             ok = id != 0 && direct == 0;
                             detail = std::format("'{}' (id {}) appears directly in {} pixel(s)", c.entity, id, direct);
+                        } else if (c.kind == "motion" || c.kind == "static_motion") {
+                            if (mode != RenderMode::Denoised) {
+                                detail = "requires --mode denoised (guide motion is a denoised-mode output)";
+                            } else if (!p.visible) {
+                                detail = "point is not on screen";
+                            } else {
+                                const gpu::HitInfoTexel& t = images->HitAt(p.x, p.y);
+                                const float* mv = images->MotionAt(p.x, p.y);
+                                const math::Vec3 got{mv[0], mv[1], mv[2]};
+                                const std::uint32_t expectedId = c.entity.empty() ? 0 : world->StableIdOf(c.entity);
+                                if (!c.entity.empty() && expectedId == 0) {
+                                    detail = std::format("unknown entity '{}'", c.entity);
+                                } else if (t.stableId == gpu::kMissId || (expectedId != 0 && t.stableId != expectedId)) {
+                                    detail = std::format("pixel ({}, {}) reports id {}{}", p.x, p.y,
+                                                         t.stableId == gpu::kMissId ? std::string("miss") : std::to_string(t.stableId),
+                                                         expectedId != 0 ? std::format(", expected {} ('{}')", expectedId, c.entity) : std::string());
+                                } else if (c.kind == "static_motion") {
+                                    ok = got.x == 0.0f && got.y == 0.0f && got.z == 0.0f;
+                                    detail = std::format("pixel ({}, {}) id {} motion ({:.6f}, {:.6f}, {:.6f}) m; expected exactly zero", p.x, p.y, t.stableId,
+                                                         got.x, got.y, got.z);
+                                } else {
+                                    const Instance* inst = nullptr;
+                                    for (const Instance& i : renderedInstances) {
+                                        if (i.id.value == t.stableId) inst = &i;
+                                    }
+                                    if (inst == nullptr) {
+                                        detail = "no transform snapshot of the rendered frame";
+                                    } else {
+                                        // Rigid translation of the instance between the previous and this rendered image
+                                        // (the test entities translate; no rotation-dependent point motion is exercised).
+                                        math::Vec3 expected = inst->prevObjectToWorld.TransformPoint({0.0f, 0.0f, 0.0f}) -
+                                                              inst->objectToWorld.TransformPoint({0.0f, 0.0f, 0.0f});
+                                        if (c.reflected) {
+                                            const math::Vec3 n = world->Level().mirrorNormal;
+                                            expected = expected - n * (2.0f * math::Dot(expected, n));
+                                        }
+                                        const float err = math::Length(got - expected);
+                                        ok = err <= c.tolerance;
+                                        detail = std::format("pixel ({}, {}) id {} motion ({:.5f}, {:.5f}, {:.5f}) m, expected ({:.5f}, {:.5f}, {:.5f}){} (error {:.2e}, tolerance {:.1e})",
+                                                             p.x, p.y, t.stableId, got.x, got.y, got.z, expected.x, expected.y, expected.z,
+                                                             c.reflected ? " reflected in the mirror plane" : "", err, c.tolerance);
+                                    }
+                                }
+                            }
+                        } else if (c.kind == "trail_lag") {
+                            const std::size_t checkIndex = static_cast<std::size_t>(&c - replay->checks.data());
+                            const TrailRecord* record = nullptr;
+                            for (const TrailRecord& t : trailRecords) {
+                                if (t.checkIndex == checkIndex) record = &t;
+                            }
+                            if (mode != RenderMode::Denoised) {
+                                detail = "requires --mode denoised";
+                            } else if (record == nullptr || record->entityId == 0) {
+                                detail = "no per-frame statistics (frozen replay, or unknown entity)";
+                            } else {
+                                TrailLagSettings settings;
+                                settings.settleFraction = c.settleFraction;
+                                settings.maxLagFrames = c.maxLagFrames;
+                                const TrailLagResult r = EvaluateTrailLag(record->luminance, record->occupied, settings);
+                                ok = r.valid && r.passed;
+                                detail = r.detail;
+                                std::string series;
+                                const std::size_t first = r.valid && r.departureIndex > 5 ? r.departureIndex - 5 : 0;
+                                const std::size_t last = std::min(record->frames.size(), r.valid ? r.departureIndex + 36 : record->frames.size());
+                                for (std::size_t i = first; i < last; ++i) {
+                                    series += std::format(" {}:{:.3e}/{}", record->frames[i], record->luminance[i], record->occupied[i]);
+                                }
+                                log::Info("trail series (frame:luminance/entity pixels), {} frames recorded:{}", record->frames.size(), series);
+                            }
+                        } else if (c.kind == "denoised_patch_positive" || c.kind == "denoised_patch_dark") {
+                            const bool positive = c.kind == "denoised_patch_positive";
+                            if (mode != RenderMode::Denoised) {
+                                detail = "requires --mode denoised";
+                            } else if (!p.visible) {
+                                detail = "patch is not on screen";
+                            } else {
+                                const PatchStats s = ComputePatchStats(*images, p.x, p.y, c.halfSize);  // The denoised image.
+                                const double lum = Luminance(s.mean);
+                                ok = positive ? lum > c.minimum : lum < c.maximum;
+                                detail = std::format("pixel ({}, {}) denoised mean luminance {:.5f} ({} {:.1e})", p.x, p.y, lum, positive ? "minimum" : "maximum",
+                                                     positive ? c.minimum : c.maximum);
+                            }
                         } else {
+                            const CaptureImages& patchImages = rawView ? *rawView : *images;  // Raw kinds read the (raw) linear image.
                             RadianceExpectation r;
                             r.description = c.description;
                             r.point = c.point.value_or(math::Vec3{});
@@ -771,22 +1191,22 @@ int Application::RunRender() {
                             r.ratioFactor = c.ratioFactor;
                             if (c.kind == "patch_positive") {
                                 r.kind = RadianceExpectation::Kind::PositivePatch;
-                                ok = EvaluateRadianceExpectation(r, camera, *images, detail);
+                                ok = EvaluateRadianceExpectation(r, camera, patchImages, detail);
                             } else if (c.kind == "patch_dark") {
                                 if (!p.visible) {
                                     detail = "patch is not on screen";
                                 } else {
-                                    const PatchStats s = ComputePatchStats(*images, p.x, p.y, c.halfSize);
+                                    const PatchStats s = ComputePatchStats(patchImages, p.x, p.y, c.halfSize);
                                     const double lum = Luminance(s.mean);
                                     ok = lum < c.maximum;
                                     detail = std::format("pixel ({}, {}) mean luminance {:.5f} (maximum {:.1e})", p.x, p.y, lum, c.maximum);
                                 }
                             } else if (c.kind == "patch_zero") {
                                 r.kind = RadianceExpectation::Kind::ZeroImage;
-                                ok = EvaluateRadianceExpectation(r, camera, *images, detail);
+                                ok = EvaluateRadianceExpectation(r, camera, patchImages, detail);
                             } else if (c.kind == "patch_ratio") {
                                 r.kind = RadianceExpectation::Kind::RatioGreaterThan;
-                                ok = EvaluateRadianceExpectation(r, camera, *images, detail);
+                                ok = EvaluateRadianceExpectation(r, camera, patchImages, detail);
                             } else {
                                 detail = "unknown check kind";
                             }

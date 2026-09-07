@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "scene": "two_room",
+  "tickRate": 60,
+  "seed": 0,
+  "segments": [
+    {"from": 0, "to": 0, "interact": true},
+    {"from": 60, "to": 231, "moveZ": 1.0},
+    {"from": 232, "to": 241, "lookDx": -0.15707963},
+    {"from": 242, "to": 605, "moveZ": 1.0},
+    {"from": 606, "to": 669, "moveX": 1.0}
+  ],
+  "checks": [
+    {"tick": 740, "kind": "hit", "description": "mirror shows the threat body (denoised mode keeps the identities)", "point": [6.4, 1.5, 11.99], "entity": "threat_body"},
+    {"tick": 740, "kind": "not_visible", "description": "threat is not in direct view", "entity": "threat_body"},
+    {"tick": 740, "kind": "motion", "description": "guide motion of the mirrored threat is the threat's motion reflected in the mirror plane (PSR)", "point": [6.4, 1.5, 11.99], "entity": "threat_body", "reflected": true, "tolerance": 0.0002},
+    {"tick": 740, "kind": "static_motion", "description": "the inspection room wall facing the camera has zero guide motion", "pixel": [0.5, 0.2]},
+    {"tick": 740, "kind": "denoised_patch_positive", "description": "mirrored threat is lit in the denoised image", "point": [6.4, 1.5, 11.99], "minimum": 0.0001},
+    {"tick": 740, "kind": "patch_positive", "description": "mirrored threat is lit in the recomposed raw mean", "point": [6.4, 1.5, 11.99], "minimum": 0.0001},
+    {"tick": 930, "kind": "trail_lag", "description": "no persistent silhouette after the threat leaves the mirror patch (T12)", "point": [6.4, 1.5, 11.99], "entity": "threat_body", "halfSize": 2, "fromFrame": 700, "maxLagFrames": 6, "settleFraction": 0.8}
+  ]
+}

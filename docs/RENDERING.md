@@ -249,8 +249,98 @@ of squares, u6 stats. Matrices in structured buffers are three explicit `float4`
 - Camera cuts, teleports, and scene reloads are not yet events; a lamp placement is a discrete pose
   change that resets its own interpolation.
 
+## Denoised mode (M4): the third image path
+
+Spec §13 keeps three independently selectable paths. `--mode raw` and `--mode reference` are
+unchanged. `--mode denoised` traces one path per pixel per frame with the same integrator
+(`path_trace.hlsl` compiled with `LC_GUIDES=1`), writes NRD's guide inputs, denoises with NRD
+REBLUR_DIFFUSE_SPECULAR (v4.17.3, `src/render/nrd_denoiser.*` is the D3D12 backend for NRD's
+graphics-agnostic API), and composes the result (`post/compose.hlsl`). Pass order per frame:
+
+```text
+scene_update -> path_trace (guided, 1 spp) -> denoise (NRD dispatches) -> compose -> [upscale] -> copy_out
+```
+
+Composition: `linear = emission + diffFactor * denoisedDiffuse + specFactor * denoisedSpecular`,
+then `display = sRGB(saturate(linear * exposure))`; diagnostic overlays touch `display` only.
+
+### Primary Surface Replacement for the mirror
+
+Ideal mirrors are delta events. The guided trace follows the mirror chain to the first non-mirror
+surface (the PSR) and describes *that* surface to the denoiser as if the mirrors did not exist
+(NRD README, "Interaction with Primary Surface Replacements"):
+
+- virtual position = camera + primary direction × (sum of the segment lengths up to the PSR);
+- virtual normal = the PSR shading normal reflected through every mirror plane in reverse order;
+- virtual motion = the PSR instance's world motion reflected the same way;
+- material, roughness, and the signals come from the PSR surface; the mirror reflectances are
+  folded into the material factors (albedo or F0 times the chain throughput).
+
+Mirror planes are taken as static between frames (the proof's mirror never moves); a moving mirror
+would need NRD's `worldPrevToWorldMatrix`. The ray-traced mirror radiance itself is unchanged.
+Test: `gpu_denoised_motion_mirror_threat` checks that the mirrored threat's guide motion equals its
+world translation reflected in the mirror plane (error 6.5e-5 m against a 2e-4 m tolerance).
+
+### Buffer contract
+
+Every NRD input, per spec §13. Formats are the D3D12 textures created in `Renderer::CreateOutputs`.
+
+| Buffer | Format | Units / space | Range | Invalid / miss value | Written by | Read by | Lifetime |
+|---|---|---|---|---|---|---|---|
+| IN_MV (`Guide Motion`) | RGBA32F | world-space translation of the virtual PSR position from the previous rendered image to this one, metres, `prev - current`; camera motion excluded (`isMotionVectorInWorldSpace = true`) | finite | 0 on miss | guided trace | NRD, compose (view), readback | frame |
+| IN_NORMAL_ROUGHNESS (`Guide Normal Roughness`) | R10G10B10A2_UNORM via `NRD_FrontEnd_PackNormalAndRoughness` | unit world-space virtual normal (oct-packed); linear roughness = our perceptual `roughness` (`sqrt(alpha)`), 1 for diffuse and emitter surfaces; material id 0 diffuse / 1 conductor in the 2 alpha bits | roughness [0.02, 1] | miss: normal (0,0,1), roughness 1, id 0 | guided trace | NRD, compose (view) | frame |
+| IN_VIEWZ (`Guide ViewZ`) | R32F | view-space z of the virtual position, metres, negative in front of the camera | (-far, 0) | miss: `-2 * denoisingRange` (= -1000 m, outside the range: NRD skips the pixel) | guided trace | NRD, compose | frame |
+| IN_DIFF_RADIANCE_HITDIST (`Signal Diffuse In`) | RGBA16F via `REBLUR_FrontEnd_PackRadianceAndNormHitDist` (YCoCg inside) | radiance gathered at and after the PSR vertex divided by `diffFactor`; normalized hit distance of the cosine-sampled continuation (pulled toward the light-sample distance where direct light dominates; the light-sample distance alone when the continuation left the scene) | radiance [0, 65504] (sanitized) | 0 for conductors and misses, hit distance 0 | guided trace | NRD, compose (raw invariant) | frame |
+| IN_SPEC_RADIANCE_HITDIST (`Signal Specular In`) | RGBA16F, same helper | the same for rough conductors divided by `specFactor`; normalized in-lobe hit distance of the VNDF-sampled continuation | same | 0 for diffuse surfaces and misses | guided trace | NRD, compose | frame |
+| OUT_DIFF/SPEC_RADIANCE_HITDIST (`Signal Diffuse/Specular Out`) | RGBA32F, unpacked with `REBLUR_BackEnd_UnpackRadianceAndNormHitDist` | denoised signals; `.w` = history length in frames (`returnHistoryLengthInsteadOfOcclusion`) | | undefined where `abs(viewZ) >= denoisingRange` (compose treats those pixels as black) | NRD | compose, readback | frame |
+| OUT_VALIDATION (`NRD Validation`) | RGBA8 | NRD's validation layer, alpha = overlay opacity | | only written with `--validation-overlay` | NRD | compose (`--view validation`) | frame |
+| `Diffuse Factor`, `Specular Factor` | RGBA16F | `NRD_MaterialFactors(virtual normal, -primary direction, chainThroughput * albedo, chainThroughput * F0, roughness)`; `.w` = material id / roughness | (0.02, 1] | (1,1,1) on miss | guided trace | compose | frame |
+| `Emission` | RGBA16F | radiance seen at or before the PSR vertex (an emitter seen directly or through mirrors), deterministic, never denoised; `.w` = 1 when a surface was hit | | 0 | guided trace | compose | frame |
+| `Direct` | RGBA16F | this sample's next-event term at the PSR vertex (diagnostic views `direct`/`indirect` and the hit-distance mix); `.w` = unfolded distance | | 0 | guided trace | compose | frame |
+| NRD permanent pool (13 textures) / transient pool (8) | per `nrd::InstanceDesc` | NRD history and scratch, 65.7 MiB at 1280x720 | | | NRD | NRD | permanent pool across frames; transient within the denoise pass |
+
+Common settings each frame: `viewToClip`, `worldToView` and their previous-frame versions (column-major, transposed from our row-major storage, non-jittered), `cameraJitter` = the global Halton(2,3) sub-pixel offset in pixels within [-0.5, 0.5) (the same offset the guided trace applied to every pixel), `motionVectorScale = 1`, `denoisingRange = 500 m`, `disocclusionThreshold = 0.01`, `frameIndex` incremented every frame, `timeDeltaBetweenFrames` = the replay period or the measured frame time, `accumulationMode` = CLEAR_AND_RESTART on the first frame after creation, RESTART on a reset, CONTINUE otherwise.
+
+REBLUR settings: `maxAccumulatedFrameNum = 30` (0.5 s at 60 Hz), `maxFastAccumulatedFrameNum = 6`, `historyFixFrameNum = 3`, `diffusePrepassBlurRadius = 0` (the pre-accumulation blur biased lighting gradients by 7–9 %; see TESTS.md), `specularPrepassBlurRadius = 50` used only for specular motion estimation, `maxBlurRadius = 30`, `hitDistanceParameters` = NRD defaults in metres (A 3, B 0.1, C 20), `minMaterialForDiffuse = minMaterialForSpecular = 0` (exact material-id comparison), `enableAntiFirefly = true`. Options: `--history-frames`, `--prepass-radius`, `--blur-radius`, `--no-antifirefly`.
+
+Radiance scaling: signals are scene-linear radiance without exposure (NRD README). Exposure is applied once, in compose, on the display image.
+
+### History handling (spec §13)
+
+- Newly visible surfaces and incompatible geometry or materials are rejected by NRD from the
+  guides (depth, normal, material id, motion).
+- Explicit resets (`Renderer::ResetHistory`, `nrd::AccumulationMode::RESTART` for one frame and a
+  restart of the raw accumulation): the first frame, a resize (the NRD instance is recreated), a
+  scene upload, a mode change, a camera cut (`RenderSnapshot::cameraCut`; the benchmark's replay
+  restart uses it), the `--blackout-at-frame` test hook, and, with `--reset-on-source-change`, any
+  emitter switch. Continuous lamp movement never resets: it is ordinary motion.
+- Bounded history: 30 frames main, 6 fast. Diagnostics: `--view history` (red = reset or rejected,
+  green = diffuse age, blue = specular age), `--view validation` with `--validation-overlay`
+  (NRD's own layer: normals, roughness, view Z, motion difference, history), the capture metadata's
+  `framesSinceHistoryReset` and `historyResets`, and the sequence log.
+
+### Raw invariant
+
+Compose also recomposes this frame's raw sample (`emission + factor * unpacked input`) and
+accumulates it like the reference path. `CaptureImages::rawMean` is therefore the mean of the
+undenoised samples since the last reset; on a static scene it must match the reference within the
+reference tolerances, which proves that the split and demodulation are lossless
+(`gpu_denoised_split_lossless`: -0.24 % against the closed form).
+
+### Jitter
+
+Raw and reference modes jitter every pixel independently (hash RNG). The denoised mode applies one
+Halton(2,3) offset per frame to every pixel (32-frame sequence) and passes the same offset to NRD;
+per-pixel random jitter cannot be described to a temporal filter.
+
+### Scaled presentation
+
+`--internal WxH` traces and denoises at the internal size; `post/upscale.hlsl` resamples the
+display image bilinearly to the window size before the present copy (spec §13 "simple diagnostic
+scale path"; not a reconstruction method). Captures record both sizes.
+
 ## Not implemented yet
 
-Denoiser buffer contract and history policy (M4); motion vectors from the previous transforms;
-scene files (M3.5); tone mapping beyond clamping; multiple-scattering compensation for rough
-conductors.
+DLSS Super Resolution through Streamline (evaluation deferred; the native path was to be stable
+first), history confidence inputs, scene files (M3.5), tone mapping beyond clamping,
+multiple-scattering compensation for rough conductors.

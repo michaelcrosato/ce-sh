@@ -3,6 +3,7 @@ add_executable(lc_cpu_tests
     cpu_raycast.h
     lc_test.h
     lc_test_main.cpp
+    test_benchmark.cpp
     test_cli.cpp
     test_emitters.cpp
     test_image_write.cpp
@@ -13,9 +14,11 @@ add_executable(lc_cpu_tests
     test_material.cpp
     test_math.cpp
     test_radiometry.cpp
+    test_reconstruction.cpp
     test_replay_scripts.cpp
     test_scene.cpp
     test_simulation.cpp
+    test_temporal_checks.cpp
     test_world.cpp
 )
 target_include_directories(lc_cpu_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

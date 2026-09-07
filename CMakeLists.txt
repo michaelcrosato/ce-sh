@@ -30,6 +30,11 @@ include(LcBuildInfo)
 
 enable_testing()
 
+if(WIN32)
+    include(LcFindDxc)   # LC_DXC_EXECUTABLE: compiles our shaders and NRD's.
+    include(LcNrd)       # NRD, ShaderMake, MathLib from external/ (git submodules).
+endif()
+
 add_subdirectory(src)
 if(WIN32)
     add_subdirectory(shaders)

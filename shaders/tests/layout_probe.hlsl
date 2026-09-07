@@ -4,6 +4,7 @@
 #include "shared/layouts.hlsli"
 
 ConstantBuffer<FrameConstants> gFrame : register(b0);
+ConstantBuffer<GuideConstants> gGuide : register(b2);
 StructuredBuffer<InstanceRecord> gInstances : register(t1);
 StructuredBuffer<MeshRecord> gMeshes : register(t2);
 StructuredBuffer<float3> gPositions : register(t3);
@@ -45,5 +46,10 @@ void main() {
     gProbe[i++] = gMeshes[1].indexCount;
     gProbe[i++] = asuint(gPositions[2].y);
     gProbe[i++] = gIndices[4];
+    gProbe[i++] = asuint(gGuide.jitterPixels.y);
+    gProbe[i++] = gGuide.outputSize.x;
+    gProbe[i++] = asuint(gGuide.hitDistParams.z);
+    gProbe[i++] = gGuide.flags;
+    gProbe[i++] = gGuide.viewMode;
     gProbe[i++] = LC_PROBE_SENTINEL;
 }

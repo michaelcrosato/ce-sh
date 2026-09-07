@@ -33,6 +33,27 @@ ComputePipeline::ComputePipeline(Device& device, ID3D12RootSignature* rootSignat
                                 csoFile.string()));
     }
     const std::vector<std::uint8_t> bytecode = files::ReadBinaryFile(csoFile);
+    Create(device, rootSignature, bytecode, name, csoFile.string());
+    log::Info("Compute pipeline '{}' created from {} ({} bytes)", WideToUtf8(name), csoFile.filename().string(), bytecode.size());
+}
+
+ComputePipeline::ComputePipeline(Device& device, ID3D12RootSignature* rootSignature, std::span<const std::uint8_t> bytecode,
+                                 std::wstring_view name, std::string_view source)
+    : source_(source) {
+    if (bytecode.empty()) {
+        throw Error(std::format("compute pipeline '{}': no DXIL bytecode for {}", WideToUtf8(name), source));
+    }
+    Create(device, rootSignature, bytecode, name, source);
+    log::Debug("Compute pipeline '{}' created from {} ({} bytes)", WideToUtf8(name), source, bytecode.size());
+}
+
+void ComputePipeline::Create(Device& device, ID3D12RootSignature* rootSignature, std::span<const std::uint8_t> bytecode,
+                             std::wstring_view name, std::string_view source) {
+    hash_ = 0xCBF29CE484222325ull;
+    for (const std::uint8_t b : bytecode) {
+        hash_ ^= b;
+        hash_ *= 0x100000001B3ull;
+    }
     D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
     desc.pRootSignature = rootSignature;
     desc.CS.pShaderBytecode = bytecode.data();
@@ -43,10 +64,9 @@ ComputePipeline::ComputePipeline(Device& device, ID3D12RootSignature* rootSignat
     if (FAILED(hr)) {
         throw Error(std::format("CreateComputePipelineState failed for {} ({} bytes of DXIL): {}. Check the debug-layer output above; "
                                 "an unsigned or mismatched DXIL blob is the usual cause.",
-                                csoFile.string(), bytecode.size(), HrToString(hr)));
+                                source, bytecode.size(), HrToString(hr)));
     }
     SetName(pso_.Get(), name);
-    log::Info("Compute pipeline '{}' created from {} ({} bytes)", WideToUtf8(name), csoFile.filename().string(), bytecode.size());
 }
 
 }  // namespace lc::gfx

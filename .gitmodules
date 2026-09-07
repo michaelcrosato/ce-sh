@@ -1,0 +1,9 @@
+[submodule "external/NRD"]
+	path = external/NRD
+	url = https://github.com/NVIDIA-RTX/NRD.git
+[submodule "external/ShaderMake"]
+	path = external/ShaderMake
+	url = https://github.com/NVIDIA-RTX/ShaderMake.git
+[submodule "external/MathLib"]
+	path = external/MathLib
+	url = https://github.com/NVIDIA-RTX/MathLib.git

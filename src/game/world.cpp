@@ -255,6 +255,20 @@ World::World(TwoRoomLevel level)
     GetScene().CommitRenderedFrame();
 }
 
+void World::Reset() {
+    player_.Reset({level_.playerStart.position, level_.playerStart.yaw, level_.playerStart.pitch});
+    door_ = Door(level_.door);
+    lamp_ = Lamp(level_, level_.floorSocket);
+    GetScene().SetEmitterOn(level_.lampMaterial, true);  // The fixture starts switched on.
+    threat_ = Threat(level_.threatPath, level_.threatSpeed);
+    ticks_ = 0;
+    wroteOnce_ = false;
+    lastDoorAngle_ = 0.0f;
+    lastLampPose_ = lamp_.Current();
+    lastThreatPose_ = threat_.Current();
+    WriteRenderScene(GetScene(), 0.0f);
+}
+
 std::optional<InteractionTarget> World::CurrentInteraction() const {
     const PlayerPose& pose = player_.Current();
     const Vec3 eye = player_.EyePosition(pose);

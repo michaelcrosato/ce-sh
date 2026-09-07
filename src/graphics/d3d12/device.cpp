@@ -80,6 +80,15 @@ bool TypedUavStoreSupported(ID3D12Device* device, DXGI_FORMAT format) {
            (support.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE) != 0;
 }
 
+bool TypedUavLoadSupported(ID3D12Device* device, DXGI_FORMAT format) {
+    D3D12_FEATURE_DATA_FORMAT_SUPPORT support{format, D3D12_FORMAT_SUPPORT1_NONE, D3D12_FORMAT_SUPPORT2_NONE};
+    if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)))) {
+        return false;
+    }
+    return (support.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) != 0 &&
+           (support.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD) != 0;
+}
+
 void __stdcall InfoQueueCallback(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id,
                                  LPCSTR description, void* context) {
     static_cast<Device*>(context)->OnDebugMessage(severity, id, description);
@@ -262,6 +271,14 @@ Device::Device(const DeviceOptions& options) {
     caps_.typedUavStoreRgba8 = TypedUavStoreSupported(device_.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
     caps_.typedUavStoreRgba32Float = TypedUavStoreSupported(device_.Get(), DXGI_FORMAT_R32G32B32A32_FLOAT);
     caps_.typedUavStoreRgba32Uint = TypedUavStoreSupported(device_.Get(), DXGI_FORMAT_R32G32B32A32_UINT);
+    caps_.typedUavStoreRgba16Float = TypedUavStoreSupported(device_.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT);
+    caps_.typedUavStoreR32Float = TypedUavStoreSupported(device_.Get(), DXGI_FORMAT_R32_FLOAT);
+    caps_.typedUavStoreR10G10B10A2 = TypedUavStoreSupported(device_.Get(), DXGI_FORMAT_R10G10B10A2_UNORM);
+    caps_.typedUavLoadRgba16Float = TypedUavLoadSupported(device_.Get(), DXGI_FORMAT_R16G16B16A16_FLOAT);
+    caps_.typedUavLoadRgba32Float = TypedUavLoadSupported(device_.Get(), DXGI_FORMAT_R32G32B32A32_FLOAT);
+    caps_.typedUavLoadR32Float = TypedUavLoadSupported(device_.Get(), DXGI_FORMAT_R32_FLOAT);
+    caps_.typedUavLoadRgba8 = TypedUavLoadSupported(device_.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
+    caps_.typedUavLoadR10G10B10A2 = TypedUavLoadSupported(device_.Get(), DXGI_FORMAT_R10G10B10A2_UNORM);
     ComPtr<IDXGIFactory5> factory5;
     if (SUCCEEDED(factory_.As(&factory5))) {
         BOOL allow = FALSE;
@@ -284,6 +301,12 @@ Device::Device(const DeviceOptions& options) {
     }
     if (!caps_.typedUavStoreRgba8 || !caps_.typedUavStoreRgba32Float || !caps_.typedUavStoreRgba32Uint) {
         throw UnsupportedHardware("Typed UAV stores for R8G8B8A8_UNORM, R32G32B32A32_FLOAT, and R32G32B32A32_UINT are required");
+    }
+    if (!caps_.typedUavStoreRgba16Float || !caps_.typedUavStoreR32Float || !caps_.typedUavStoreR10G10B10A2 || !caps_.typedUavLoadRgba16Float ||
+        !caps_.typedUavLoadRgba32Float || !caps_.typedUavLoadR32Float || !caps_.typedUavLoadRgba8 || !caps_.typedUavLoadR10G10B10A2) {
+        throw UnsupportedHardware(
+            "Typed UAV loads and stores for the denoiser guide formats (R16G16B16A16_FLOAT, R32G32B32A32_FLOAT, R32_FLOAT, "
+            "R10G10B10A2_UNORM, R8G8B8A8_UNORM) are required");
     }
 
     // Debug messages.

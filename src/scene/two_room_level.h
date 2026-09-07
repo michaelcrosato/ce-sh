@@ -39,6 +39,7 @@ struct TwoRoomLevel {
     float threatSpeed = 1.2f;
     math::Vec3 threatCheckPosition;      // Position on the path where the mirror shows the threat.
     InstanceId mirror;
+    math::Vec3 mirrorNormal;        // Unit normal of the mirror's reflecting face (toward the room).
     PoseSpec playerStart;           // Room A, facing the door.
     PoseSpec mirrorCheckCamera;     // Room B, facing the mirror.
     math::Vec3 mirrorCheckPoint;    // Point on the mirror face whose reflection reaches the threat.

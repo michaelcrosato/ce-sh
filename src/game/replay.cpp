@@ -125,6 +125,12 @@ std::string Replay::ToJson() const {
         j.Field("tolerance", static_cast<double>(c.tolerance));
         j.Field("ratioFactor", static_cast<double>(c.ratioFactor));
         j.Field("halfSize", c.halfSize);
+        if (c.kind == "motion") j.Field("reflected", c.reflected);
+        if (c.kind == "trail_lag") {
+            j.Field("maxLagFrames", c.maxLagFrames);
+            j.Field("settleFraction", static_cast<double>(c.settleFraction));
+            j.Field("fromFrame", static_cast<std::uint64_t>(c.fromFrame));
+        }
         j.EndObject();
     }
     j.EndArray();
@@ -205,11 +211,26 @@ std::optional<Replay> Replay::FromJson(std::string_view text, std::string& error
             check.tolerance = static_cast<float>(c.NumberOr("tolerance", 1e-6));
             check.ratioFactor = static_cast<float>(c.NumberOr("ratioFactor", 1.2));
             check.halfSize = static_cast<std::uint32_t>(c.NumberOr("halfSize", 2));
-            static const char* kKinds[] = {"hit", "not_visible", "patch_positive", "patch_dark", "patch_zero", "patch_ratio"};
+            check.reflected = c.BoolOr("reflected", false);
+            check.maxLagFrames = static_cast<std::uint32_t>(c.NumberOr("maxLagFrames", 6));
+            check.settleFraction = static_cast<float>(c.NumberOr("settleFraction", 0.8));
+            check.fromFrame = static_cast<std::uint64_t>(c.NumberOr("fromFrame", 0));
             bool known = false;
-            for (const char* k : kKinds) known = known || check.kind == k;
+            for (const char* k : kReplayCheckKinds) known = known || check.kind == k;
             if (!known) {
                 error = std::format("replay JSON: unknown check kind '{}'", check.kind);
+                return std::nullopt;
+            }
+            if (check.kind == "trail_lag" && (check.settleFraction <= 0.0f || check.settleFraction > 1.0f || check.fromFrame > check.tick)) {
+                error = std::format("replay JSON: trail_lag check '{}' needs settleFraction in (0, 1] and fromFrame <= tick", check.description);
+                return std::nullopt;
+            }
+            if ((check.kind == "motion" || check.kind == "static_motion") && !check.point && !check.pixel) {
+                error = std::format("replay JSON: {} check '{}' needs a point or pixel", check.kind, check.description);
+                return std::nullopt;
+            }
+            if (check.kind == "motion" && check.entity.empty()) {
+                error = std::format("replay JSON: motion check '{}' needs an entity", check.description);
                 return std::nullopt;
             }
             r.checks.push_back(check);

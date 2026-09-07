@@ -11,14 +11,24 @@
 
 namespace lc {
 
-enum class AppRenderMode { Diagnostic, Raw, Reference };
+enum class AppRenderMode { Diagnostic, Raw, Reference, Denoised };
 enum class AppStrategy { Mis, Light, Bsdf };
+
+struct CropRect {
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::uint32_t width = 0;   // 0 = full image.
+    std::uint32_t height = 0;
+};
 
 struct AppOptions {
     std::string scene = "rt_triangle";
-    std::uint32_t width = 1280;
+    std::uint32_t width = 1280;         // Window client size; also the trace size unless --internal is given.
     std::uint32_t height = 720;
+    std::uint32_t internalWidth = 0;    // --internal WxH: trace and denoise size; the display is resampled to the window (0 = same).
+    std::uint32_t internalHeight = 0;
     ViewMode view = ViewMode::Normals;
+    bool viewSet = false;               // --view was given (denoised mode draws it as an overlay).
     AppRenderMode mode = AppRenderMode::Raw;
     AppStrategy strategy = AppStrategy::Mis;
     std::uint32_t spp = 256;            // Reference mode target samples per pixel.
@@ -47,6 +57,24 @@ struct AppOptions {
     std::optional<std::filesystem::path> replay;        // Drive the simulation from a replay file.
     std::int64_t stopAtTick = -1;                       // With --replay: run exactly this many ticks, then freeze.
     float mouseSensitivity = 0.0022f;                   // Radians per raw mouse count.
+    // Denoised mode (M4).
+    std::uint32_t historyFrames = 30;                   // NRD history bound in frames.
+    float prepassRadius = 0.0f;                         // NRD diffuse pre-accumulation blur radius in pixels (0 = off).
+    float blurRadius = 30.0f;                           // NRD maximum spatial blur radius in pixels.
+    bool antiFirefly = true;
+    bool validationOverlay = false;                     // NRD renders its validation layer (shown by --view validation).
+    bool resetOnSourceChange = false;                   // Explicit history reset when an emitter switches.
+    std::int64_t blackoutAtFrame = -1;                  // Test hook: switch every emitter off and reset history before this frame.
+    // Frame sequences (spec §18): one cropped display PNG per selected frame plus an event log.
+    std::optional<std::filesystem::path> captureSequence;
+    std::uint32_t captureFrom = 0;
+    std::uint32_t captureTo = 0;                        // 0 = until exit.
+    std::uint32_t captureEvery = 1;
+    CropRect captureCrop;
+    // Benchmark (spec §17, §21): loop the replay and write the report.
+    float benchmarkSeconds = 0.0f;
+    float warmupSeconds = 5.0f;
+    std::optional<std::filesystem::path> report;
     bool help = false;
 };
 

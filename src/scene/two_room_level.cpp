@@ -138,6 +138,7 @@ TwoRoomLevel BuildTwoRoomLevel() {
         level.mirror = s.AddInstance("mirror", mesh, Mat4::Translation(mirrorCentre) * Mat4::RotationY(mirrorYaw), mirrorMaterial);
     }
     level.mirrorCheckPoint = mirrorCentre - normal * 0.01f;  // On the front face.
+    level.mirrorNormal = -normal;  // The face that reflects the room (the slab's -Z side after the yaw).
     level.hallCheckPoint = level.threatCheckPosition;
 
     // Lamp fixture: housing box and emitting face under one pose; starts on the Room A floor, in

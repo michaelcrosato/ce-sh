@@ -2,6 +2,7 @@
 
 #include "core/cli.h"
 
+#include <charconv>
 #include <format>
 
 namespace lc {
@@ -29,23 +30,48 @@ std::string ViewModeList() {
     return list;
 }
 
+// Parses a list of unsigned integers separated by `separator` ("1280x720", "8,8,64,64").
+bool ParseUnsignedList(std::string_view text, char separator, std::span<std::uint32_t> out) {
+    std::size_t index = 0;
+    std::size_t start = 0;
+    while (index < out.size()) {
+        const std::size_t end = text.find(separator, start);
+        const std::string_view token = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+        if (token.empty()) return false;
+        unsigned long long value = 0;
+        const auto res = std::from_chars(token.data(), token.data() + token.size(), value);
+        if (res.ec != std::errc() || res.ptr != token.data() + token.size() || value > 0xFFFFFFFFull) return false;
+        out[index++] = static_cast<std::uint32_t>(value);
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return index == out.size() && text.find(separator, start) == std::string_view::npos;
+}
+
 }  // namespace
 
 ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     ArgParser p;
     p.AddFlag("help", "Print this help and exit.");
     p.AddStringOption("scene", "Built-in scene name (see docs/TESTS.md for the list).", "rt_triangle");
-    p.AddIntOption("width", "Window client width and internal trace width in pixels.", 1280);
-    p.AddIntOption("height", "Window client height and internal trace height in pixels.", 720);
-    p.AddStringOption("mode", "diag (camera-ray diagnostic views), raw (one path sample per frame), reference (progressive accumulation).", "raw");
-    p.AddStringOption("view", "Diagnostic view for --mode diag: " + ViewModeList() + ".", "normals");
+    p.AddIntOption("width", "Window client width in pixels (and the trace width unless --internal is given).", 1280);
+    p.AddIntOption("height", "Window client height in pixels (and the trace height unless --internal is given).", 720);
+    p.AddStringOption("internal", "Internal trace size WxH when it differs from the window (e.g. 1280x720); the display is resampled.", "");
+    p.AddStringOption("mode",
+                      "diag (camera-ray diagnostic views), raw (one path sample per frame), reference (progressive accumulation), "
+                      "denoised (one sample per frame reconstructed by NRD REBLUR).",
+                      "raw");
+    p.AddStringOption("view",
+                      "Diagnostic view. --mode diag: normals, ids, depth, bary, facing, prims. --mode denoised overlays: normals, depth, "
+                      "motion, viewz, history, diffuse, specular, raw, direct, indirect, validation. All: " + ViewModeList() + ".",
+                      "normals");
     p.AddStringOption("strategy", "Integrator estimator: mis, light, bsdf.", "mis");
     p.AddIntOption("spp", "Reference mode: samples per pixel to accumulate before capture/validation (never capped).", 256);
     p.AddIntOption("max-hits", "Surface hits per path including the camera hit and mirror hits (2..32).", 4);
     p.AddIntOption("samples-per-frame", "Reference mode: dispatches per frame (1..64), bounding GPU work per submission.", 4);
     p.AddFloatOption("exposure", "Display exposure scale applied before sRGB encoding (does not change radiance).", 1.0f);
     p.AddIntOption("seed", "Deterministic sampling seed.", 0);
-    p.AddFlag("no-jitter", "Trace through pixel centres instead of jittering inside the pixel.");
+    p.AddFlag("no-jitter", "Trace through pixel centres instead of jittering inside the pixel (raw and reference modes).");
     p.AddFlag("headless", "Render without a window or swap chain (used by tests and captures).");
     p.AddFlag("validate", "After rendering, check hit identifiers, radiance expectations, GPU layouts, invalid-value counters, and debug-layer messages; exit 0 or 1.");
     p.AddFlag("resize-test", "Cycle the window through several client sizes and verify the outputs follow.");
@@ -65,10 +91,25 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     p.AddStringOption("replay", "Drive the simulation from this replay file (one tick per frame; deterministic).", "");
     p.AddIntOption("stop-at-tick", "With --replay: advance exactly this many ticks before rendering, then freeze (for reference mode and checks).", -1);
     p.AddFloatOption("sensitivity", "Mouse look sensitivity in radians per raw count.", 0.0022f);
+    p.AddIntOption("history-frames", "Denoised mode: NRD history bound in frames (1..63; 30 = 0.5 s at 60 Hz).", 30);
+    p.AddFloatOption("prepass-radius", "Denoised mode: NRD diffuse pre-accumulation blur radius in pixels (0 = off; biases lighting gradients).", 0.0f);
+    p.AddFloatOption("blur-radius", "Denoised mode: NRD maximum spatial blur radius in pixels (shrinks as history accumulates).", 30.0f);
+    p.AddFlag("no-antifirefly", "Denoised mode: disable NRD's anti-firefly filter.");
+    p.AddFlag("validation-overlay", "Denoised mode: let NRD render its validation layer (view it with --view validation).");
+    p.AddFlag("reset-on-source-change", "Denoised mode: reset the temporal history whenever an emitter switches (circuit change).");
+    p.AddIntOption("blackout-at-frame", "Test hook: before this frame, switch every emitter off and reset the history (-1 = never).", -1);
+    p.AddStringOption("capture-sequence", "Directory that receives one cropped display PNG per selected frame plus sequence.json (event log).", "");
+    p.AddIntOption("capture-from", "First frame of the sequence capture.", 0);
+    p.AddIntOption("capture-to", "Last frame of the sequence capture (0 = until exit).", 0);
+    p.AddIntOption("capture-every", "Frame stride of the sequence capture (>= 1).", 1);
+    p.AddStringOption("capture-crop", "x,y,w,h crop of the sequence frames in pixels (default: the full image).", "");
+    p.AddFloatOption("benchmark-seconds", "With --replay: loop the replay for this many measured seconds and write --report.", 0.0f);
+    p.AddFloatOption("warmup-seconds", "Benchmark: excluded warm-up time before measuring.", 5.0f);
+    p.AddStringOption("report", "Benchmark report JSON file (required with --benchmark-seconds).", "");
 
     ParsedOptions result;
     result.usage = p.Usage("LastCircuit.exe",
-                           "Last Circuit: custom D3D12 engine with mandatory hardware path tracing (M2: raw light transport).");
+                           "Last Circuit: custom D3D12 engine with mandatory hardware path tracing (M4: stable real-time image).");
 
     if (const auto error = p.Parse(args)) {
         result.error = *error;
@@ -88,12 +129,23 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     o.width = static_cast<std::uint32_t>(width);
     o.height = static_cast<std::uint32_t>(height);
 
+    if (const std::string s = p.GetString("internal"); !s.empty()) {
+        std::uint32_t wh[2] = {};
+        if (!ParseUnsignedList(s, 'x', wh) || wh[0] < 16 || wh[0] > 16384 || wh[1] < 16 || wh[1] > 16384) {
+            result.error = std::format("--internal expects WxH between 16 and 16384 (got '{}')", s);
+            return result;
+        }
+        o.internalWidth = wh[0];
+        o.internalHeight = wh[1];
+    }
+
     const std::string mode = p.GetString("mode");
     if (mode == "diag") o.mode = AppRenderMode::Diagnostic;
     else if (mode == "raw") o.mode = AppRenderMode::Raw;
     else if (mode == "reference") o.mode = AppRenderMode::Reference;
+    else if (mode == "denoised") o.mode = AppRenderMode::Denoised;
     else {
-        result.error = std::format("unknown --mode '{}'; valid modes: diag, raw, reference", mode);
+        result.error = std::format("unknown --mode '{}'; valid modes: diag, raw, reference, denoised", mode);
         return result;
     }
 
@@ -103,6 +155,21 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
         return result;
     }
     o.view = *view;
+    o.viewSet = p.Has("view");
+    if (o.viewSet) {
+        if (o.mode == AppRenderMode::Diagnostic && IsDenoisedOnlyView(o.view)) {
+            result.error = std::format("--view {} exists only in --mode denoised", ViewModeName(o.view));
+            return result;
+        }
+        if (o.mode == AppRenderMode::Denoised && IsDiagnosticOnlyView(o.view)) {
+            result.error = std::format("--view {} exists only in --mode diag", ViewModeName(o.view));
+            return result;
+        }
+        if (o.mode == AppRenderMode::Raw || o.mode == AppRenderMode::Reference) {
+            result.error = "--view applies to --mode diag and --mode denoised only";
+            return result;
+        }
+    }
 
     const std::string strategy = p.GetString("strategy");
     if (strategy == "mis") o.strategy = AppStrategy::Mis;
@@ -224,6 +291,85 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     }
     if (!(o.mouseSensitivity > 0.0f) || o.mouseSensitivity > 1.0f) {
         result.error = std::format("--sensitivity must be within (0, 1] radians per count (got {})", o.mouseSensitivity);
+        return result;
+    }
+
+    const int historyFrames = p.GetInt("history-frames");
+    if (historyFrames < 1 || historyFrames > 63) {
+        result.error = std::format("--history-frames must be between 1 and 63 (got {})", historyFrames);
+        return result;
+    }
+    o.historyFrames = static_cast<std::uint32_t>(historyFrames);
+    o.prepassRadius = p.GetFloat("prepass-radius");
+    o.blurRadius = p.GetFloat("blur-radius");
+    if (o.prepassRadius < 0.0f || o.prepassRadius > 200.0f || o.blurRadius < 0.0f || o.blurRadius > 200.0f) {
+        result.error = "--prepass-radius and --blur-radius must be within 0..200 pixels";
+        return result;
+    }
+    o.antiFirefly = !p.Has("no-antifirefly");
+    o.validationOverlay = p.Has("validation-overlay");
+    o.resetOnSourceChange = p.Has("reset-on-source-change");
+    o.blackoutAtFrame = p.GetInt("blackout-at-frame");
+    if (o.blackoutAtFrame < -1) {
+        result.error = std::format("--blackout-at-frame must be -1 or a frame index (got {})", o.blackoutAtFrame);
+        return result;
+    }
+    if (o.mode != AppRenderMode::Denoised && (p.Has("history-frames") || p.Has("no-antifirefly") || p.Has("validation-overlay") ||
+                                              p.Has("reset-on-source-change") || p.Has("prepass-radius") || p.Has("blur-radius"))) {
+        result.error = "--history-frames, --prepass-radius, --blur-radius, --no-antifirefly, --validation-overlay, and --reset-on-source-change apply to --mode denoised only";
+        return result;
+    }
+
+    if (const std::string s = p.GetString("capture-sequence"); !s.empty()) o.captureSequence = std::filesystem::path(s);
+    const int captureFrom = p.GetInt("capture-from");
+    const int captureTo = p.GetInt("capture-to");
+    const int captureEvery = p.GetInt("capture-every");
+    if (captureFrom < 0 || captureTo < 0 || captureEvery < 1) {
+        result.error = "--capture-from and --capture-to must be zero or positive and --capture-every at least 1";
+        return result;
+    }
+    if (captureTo != 0 && captureTo < captureFrom) {
+        result.error = std::format("--capture-to ({}) is before --capture-from ({})", captureTo, captureFrom);
+        return result;
+    }
+    o.captureFrom = static_cast<std::uint32_t>(captureFrom);
+    o.captureTo = static_cast<std::uint32_t>(captureTo);
+    o.captureEvery = static_cast<std::uint32_t>(captureEvery);
+    if (const std::string s = p.GetString("capture-crop"); !s.empty()) {
+        std::uint32_t crop[4] = {};
+        if (!ParseUnsignedList(s, ',', crop) || crop[2] == 0 || crop[3] == 0) {
+            result.error = std::format("--capture-crop expects x,y,w,h with w and h above zero (got '{}')", s);
+            return result;
+        }
+        o.captureCrop = {crop[0], crop[1], crop[2], crop[3]};
+    }
+    if (!o.captureSequence && (p.Has("capture-from") || p.Has("capture-to") || p.Has("capture-every") || p.Has("capture-crop"))) {
+        result.error = "--capture-from/--capture-to/--capture-every/--capture-crop require --capture-sequence";
+        return result;
+    }
+
+    o.benchmarkSeconds = p.GetFloat("benchmark-seconds");
+    o.warmupSeconds = p.GetFloat("warmup-seconds");
+    if (const std::string s = p.GetString("report"); !s.empty()) o.report = std::filesystem::path(s);
+    if (o.benchmarkSeconds < 0.0f || o.warmupSeconds < 0.0f) {
+        result.error = "--benchmark-seconds and --warmup-seconds must be zero or positive";
+        return result;
+    }
+    if (o.benchmarkSeconds > 0.0f) {
+        if (!o.replay) {
+            result.error = "--benchmark-seconds requires --replay (a fixed replay is the benchmark content)";
+            return result;
+        }
+        if (!o.report) {
+            result.error = "--benchmark-seconds requires --report <file.json>";
+            return result;
+        }
+        if (o.stopAtTick >= 0) {
+            result.error = "--benchmark-seconds cannot be combined with --stop-at-tick";
+            return result;
+        }
+    } else if (o.report) {
+        result.error = "--report requires --benchmark-seconds";
         return result;
     }
 

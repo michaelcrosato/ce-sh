@@ -12,7 +12,7 @@ State at milestone M1. Everything below exists in the code; nothing is a plan.
 | `lc_app_options` | `src/app/options.*` | `AppOptions` from the command line | `lc_core`, contracts |
 | `lc_platform` | `src/platform` | Win32 window and events, file helpers, HRESULT reporting | `lc_core` |
 | `lc_graphics` | `src/graphics/d3d12` | Device/adapter/feature checks, queue + fence, swap chain, descriptor heap, buffers, UAV textures + readback, upload arena, timestamp queries, BLAS/TLAS, root signature + compute PSO | `lc_platform` |
-| `lc_render` | `src/render` | `SceneGpu` (geometry residency, BLAS per mesh, TLAS, per-frame instance/material/emitter tables), `Renderer` (diagnostic pass, path tracer in raw and reference modes, accumulation, readback, layout probe), capture writer | `lc_graphics`, `lc_scene` |
+| `lc_render` | `src/render` | `SceneGpu` (geometry residency, BLAS per mesh, TLAS, per-frame instance/material/emitter tables), `Renderer` (diagnostic pass, path tracer in raw and reference modes, the denoised path: guided trace, NRD, compose, resampling; accumulation, readback, layout probe), `NrdDenoiser` (D3D12 backend for NRD's API), capture and sequence writers | `lc_graphics`, `lc_scene`, `NRD` |
 | `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks), `World` (player, door, lamp fixture, threat, interaction) | `lc_scene`, `lc_core` |
 | `LastCircuit.exe` | `src/app` | Modes (list adapters, windowed, headless, play, record, replay, validate, resize test, capture, stats), environment report, main loop | everything above |
 | `lc_cpu_tests.exe` | `tests/cpu` | Portable unit tests, including CPU runs of the committed replays | `lc_core`, `lc_scene`, `lc_game`, options, contracts |
@@ -31,10 +31,15 @@ World::WriteRenderScene(alpha)  interpolated poses -> Scene::SetTransform only f
 RenderSnapshot                  scene + camera (interpolated player eye) + frame index + view mode
 Renderer::BeginFrame            wait for this slot's fence (2 frames in flight), reset allocator and upload arena,
                                 collect the GPU timings of the frame that last used the slot
-Renderer::RecordTrace           UAV barriers on the outputs; SceneGpu::UpdateFrame writes instance, material, and emitter
-                                tables into the arena and rebuilds the TLAS only when a transform revision changed;
-                                diagnostic dispatch, or N path-tracer dispatches (reference) with accumulation resets
-Renderer::RecordCopyToBackBuffer display texture UAV->COPY_SOURCE, back buffer PRESENT->COPY_DEST, CopyResource, back
+Renderer::RecordTrace           UAV barrier; SceneGpu::UpdateFrame writes instance, material, and emitter tables into the
+                                arena and rebuilds the TLAS only when a transform revision changed; then one of:
+                                  diag       camera_view dispatch
+                                  raw/ref    1 or N path_trace dispatches with accumulation resets on incompatible changes
+                                  denoised   path_trace_guided (1 spp, guides, split signals) -> NRD dispatches (history
+                                             reset events applied) -> compose (modulate, emission, exposure, raw invariant,
+                                             overlays on the display image only)
+Renderer::RecordCopyToBackBuffer [upscale to the presented size] display UAV->COPY_SOURCE, back buffer PRESENT->COPY_DEST,
+                                CopyResource, back
 Renderer::EndFrame              resolve timestamps, close, ExecuteCommandLists, fence signal
 SwapChain::Present              vsync on/off; DXGI_ERROR_DEVICE_REMOVED triggers the DRED report and exit 1
 Scene::CommitRenderedFrame      previous transforms := the transforms just rendered (motion history refers to images)
@@ -83,7 +88,10 @@ the failing call, HRESULT text, and file:line. The application maps them to exit
 `ID3D12InfoQueue1::RegisterMessageCallback`, are logged, and are counted; `--validate` fails on
 any error-severity message.
 
+The application's test paths add a per-frame readback (frame sequences, trail-lag statistics) and
+the benchmark loop (replay restarts with a world reset that counts as a camera cut).
+
 ## Not yet present
 
-Collision (M5), denoising and reconstruction (M4), audio (M5), scene files (M3.5), the objective
-and threat state machines (M5), the six-room level (M6). `docs/STATUS.md` names the next task.
+Collision (M5), DLSS reconstruction (deferred evaluation), audio (M5), scene files (M3.5), the
+objective and threat state machines (M5), the six-room level (M6). `docs/STATUS.md` names the next task.

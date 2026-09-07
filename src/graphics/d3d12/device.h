@@ -42,6 +42,15 @@ struct DeviceCapabilities {
     bool typedUavStoreRgba8 = false;
     bool typedUavStoreRgba32Float = false;
     bool typedUavStoreRgba32Uint = false;
+    // Denoiser guide formats (M4): stores by the guided trace, loads by the compose pass.
+    bool typedUavStoreRgba16Float = false;
+    bool typedUavStoreR32Float = false;
+    bool typedUavStoreR10G10B10A2 = false;
+    bool typedUavLoadRgba16Float = false;
+    bool typedUavLoadRgba32Float = false;
+    bool typedUavLoadR32Float = false;
+    bool typedUavLoadRgba8 = false;
+    bool typedUavLoadR10G10B10A2 = false;
     std::uint64_t videoMemoryBudget = 0;
     std::uint64_t videoMemoryCurrentUsage = 0;
 };

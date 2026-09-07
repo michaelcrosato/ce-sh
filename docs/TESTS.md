@@ -37,6 +37,9 @@ to pass. When a scene was redesigned (T07, see below) the tolerance stayed and t
 | `test_simulation.cpp` | Whole ticks and alpha, the 0.25 s cap, exact tick runs; replay run-length recording and lookup; JSON round trip; version, ordering, and kind validation |
 | `test_world.cpp` | Player movement and pitch clamp; door state machine and interpolated angle; threat path and ping-pong; lamp held pose, sockets, toggle; the world writes only moving transforms and keeps rendered history; the two-room level: triangle and emitter budgets, the mirror shows the threat that is not directly visible, the door blocks the fixture when closed and not when open |
 | `test_replay_scripts.cpp` | Runs `t05_mirror_threat`, `t06_door_light`, `t06_lamp_shelf` on the CPU: poses at check ticks, door and lamp states, mirror identity through the ray caster, direct invisibility of the threat, light paths blocked/unblocked by the door, the shelf lamp's line to the floor patch |
+| `test_reconstruction.cpp` | NRD matrix conversion to column-major; the Halton(2,3) jitter stays within half a pixel, does not repeat within its sequence, and wraps |
+| `test_temporal_checks.cpp` | Trail-lag metric: measured lag on synthetic series, pass/fail against the limit, and invalid series (never leaves, too short, re-entry, no contrast) reported instead of guessed |
+| `test_benchmark.cpp` | Nearest-rank percentiles, median, counts above 33.3 / 50 ms; the report parses back as JSON with every required section |
 
 ## GPU tests (`tests/gpu/CMakeLists.txt`)
 
@@ -93,6 +96,49 @@ door and lamp states, threat position, and the mirror/occlusion facts with the r
 | `gpu_t06_lamp_off` | tick 900, reference 128 spp | After the F press the same patch is dark (`< 1e-4`) |
 | `gpu_replay_motion_tlas_rebuilds` | `t06_door_light.json`, one tick per frame, raw, 120 frames | TLAS rebuild count equals the number of frames with motion (plus the first frame); zero debug-layer errors |
 
+### M4: denoised mode and temporal checks (spec §13, §19 T12)
+
+`--mode denoised` traces one sample per pixel per frame and reconstructs with NRD REBLUR
+(docs/RENDERING.md, "Denoised mode"). Two images come out of every run: the denoised production
+image (`linear`) and the mean of the recomposed raw samples since the last history reset
+(`rawMean`, written as `<capture>_raw.pfm`). `--validate` holds the raw mean to the scene's
+reference tolerances (the split into signals and the demodulation are lossless) and the denoised
+image to a documented denoiser tolerance: for analytic patches 5 % relative
+(`kDenoisedRelativeTolerance`), chosen before the first measurement; the other patch kinds keep
+their thresholds. Replay checks gained `denoised_patch_positive/dark` (on the denoised image),
+`motion`, `static_motion`, and `trail_lag` (definitions in `src/game/replay.h`). Checks on
+frame-by-frame replays are evaluated at the final tick (`--frames N` renders ticks 0..N-1 and the
+checks at tick N are evaluated at the end).
+
+| Test | Run | Pass criteria and result on the recorded machine |
+|---|---|---|
+| `gpu_denoised_split_lossless` | `t09_rect_light`, 64 frames | Raw mean within the M2 tolerance of the closed-form irradiance (measured -0.24 % and +0.21 %); denoised within 5 % (-3.6 % under the emitter, -4.0 % beside it: the spatial filter's bias on the sharpest direct-light gradient in the test set; it was -7 / -9 % before NRD's pre-accumulation blur was switched off and the light-sample distance was mixed into the diffuse hit distance) |
+| `gpu_denoised_box_static` | `t08_box`, 120 frames | Raw-mean and denoised lit patches (denoised within 1.5 % of the raw mean); invalid-value counters 0; 0 debug-layer errors |
+| `gpu_denoised_mirror_box`, `gpu_denoised_metals_room` | 64 frames each | The M2 mirror identity/energy scene and the conductor scene run through the PSR path and the specular signal with their expectations on the raw mean and the denoised image |
+| `gpu_denoised_blackout_reset` | `t08_box`, `--blackout-at-frame 60 --frames 62` | Reset correctness (spec §19): after every emitter is switched off and the history is explicitly reset, the denoised image two frames later has a maximum radiance <= 1e-4 and the raw mean since the reset is exactly 0 (measured 0 and 0) |
+| `gpu_denoised_motion_lamp` | `t12_lamp_motion.json`, 400 frames | The carried lamp housing at the lower right reports its identity and a guide motion equal to its rendered translation between the previous and this image (within 2e-4 m); a hall wall pixel has exactly zero motion while the camera moves |
+| `gpu_denoised_motion_mirror_threat` | `t12_mirror_motion.json`, 740 frames | Mirror pixel: threat identity after one mirror bounce, threat not directly visible, guide motion equal to the threat's translation reflected in the mirror plane (PSR; measured error 6.5e-5 m against 2e-4 m), the wall facing the camera exactly static, the mirrored threat lit in the denoised image (`> 1e-4`) and in the raw mean |
+| `gpu_denoised_trail_lag` | `t12_mirror_motion.json`, 930 frames, per-frame readback | Trail lag (below) on the 5x5 mirror patch after the threat leaves it: measured 0 frames against the 6-frame (100 ms) limit; the denoised luminance follows the occupancy of the patch frame by frame (1.0e-3 with 25 threat pixels, 2.6e-3 with 5, 3.0e-3 with 0) |
+| `gpu_denoised_resize_test`, `gpu_denoised_scaled_resize_test` | windowed | The NRD instance is recreated on every resize (native, and 960x540 internal with the presented size following the window); 0 debug-layer errors |
+| `gpu_benchmark_smoke` | `--benchmark-seconds 2 --warmup-seconds 0.5`, headless | The benchmark loop runs, restarts the replay, and writes a report with every §21 section |
+
+**Trail lag** (the automated measure of spec §19 "no obvious obsolete silhouette persisting longer
+than 100 ms"): per frame, the mean denoised luminance of the patch and the number of patch pixels
+whose hit identity is the moving entity are recorded. Departure is the first frame with zero
+entity pixels after a frame with some. The settled value is the mean over 12 frames starting 20
+frames after departure (the entity must stay out that long). The lag is the number of frames after
+departure until the luminance is within 20 % (`settleFraction` 0.8) of the step from the last
+occupied frame to the settled value. Implemented in `src/app/temporal_checks.*` and pinned by
+`test_temporal_checks.cpp`; global image averages are never used (the patch is the reflected
+threat).
+
+Frame sequences (spec §18): `--capture-sequence <dir> --capture-from A --capture-to B
+--capture-every K --capture-crop x,y,w,h` writes one cropped display PNG per selected frame plus
+`sequence.json` (frame, tick, door and lamp state, threat and player positions, history resets)
+from the running program. Sequences kept for the M4 record: the mirror during the threat's exit
+(t12 frames 735–769, 200x200 crop), the door edge while it closes (t06 frames 290–329), the
+carried lamp while walking (t12 lamp frames 380–419).
+
 Cross-run comparisons via `tests/scripts/compare_runs.ps1` (patch means per channel within
 `max(relTol * |ref|, 3 * sqrt(se_a^2 + se_b^2))`):
 
@@ -136,8 +182,16 @@ Approved image baselines are not yet stored; radiance is currently checked numer
   open doorway onto the hall floor with the open leaf beside it; at tick 800 the lamp on the shelf
   lights the floor of the dark inspection room.
 
+- Denoised two_room (M4): tick 740 at exposure 6 (the mirror shows the threat with clean shading
+  and no residual noise), the `history`, `motion`, `normals`, `viewz`, `raw`, and `validation`
+  overlays of the same frame, tick 300 (open door) and tick 800 (shelf lamp) denoised, and the
+  three cropped sequences with their event logs (`artifacts/m4/seq_*`).
+
 ## Not yet implemented
 
 T11 systematic offset sweeps (partly covered by the T03/T04 seals and the 400 m furnace floor),
-T12–T18. The §4 fourth sequence step (the threat's shadow moving across a wall before direct
-contact) is staged in M5.
+T13–T18 (T16's fixed 180-second full-encounter replay needs the M5/M6 content; the benchmark
+command exists). The §4 fourth sequence step (the threat's shadow moving across a wall before
+direct contact) is staged in M5. T12 human confirmation at normal playback speed is recorded in
+STATUS.md as NOT RUN with a person; the automated lag metric and the frame sequences are the
+evidence.

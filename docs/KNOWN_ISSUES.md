@@ -2,18 +2,15 @@
 
 Format: id, severity, affected build, description, reproduction, planned verification.
 
-## KI-001 — low — all builds — no scaled presentation path
+## KI-001 — closed in M4 — scaled presentation path
 
-`--width/--height` set both the trace resolution and the window client size; there is no
-1280x720-internal / 1920x1080-output mode yet (spec §17). If the swap chain and render outputs
-ever differ in size, the present copy is skipped with a warning until the next resize.
-Verification: M4 adds the scaled path and a test that presents a 1280x720 trace into a 1920x1080 window.
+`--internal WxH` traces at the internal size and resamples the display to the window
+(`gpu_denoised_scaled_resize_test`). A swap chain that matches neither size still skips the copy
+with a warning until the next resize.
 
-## KI-002 — low — all builds — no camera or object motion yet
+## KI-002 — closed in M3 — camera and object motion
 
-Scenes are static; input, the fixed-step simulation, and moving instances arrive with M3. The
-TLAS rebuild-on-change path is therefore only exercised by the first frame (`tlas_update` reports
-0 ms afterwards). Verification: M3 replay test with a moving object and a TLAS rebuild-versus-update measurement.
+Replays move the camera, door, lamp, and threat; TLAS rebuilds are counted against motion frames.
 
 ## KI-003 — low — Debug builds — shaders compiled with `-Od`
 
@@ -90,6 +87,29 @@ only; a documented tone curve and an accessibility brightness control arrive wit
 
 The interaction target is logged (`[E] door`) instead of drawn; a diagnostic panel (Dear ImGui
 evaluation) is planned with the scene-file reload command.
+
+## KI-018 — medium — denoised mode — spatial filtering biases sharp lighting gradients
+
+The denoised image is 3.6–4.0 % dark on the floor under a small emitter (`t09_rect_light`), inside
+the 5 % tolerance but not zero; enclosed scenes are within 1.5 %. The raw mean is exact. Reduce
+`--blur-radius` for accuracy at the cost of residual noise. Verification: the T12 review with a
+person and a per-scene tolerance record when the six-room content exists.
+
+## KI-019 — low — denoised mode — no history confidence input
+
+NRD's anti-lag runs on its defaults; the optional history-confidence inputs (previous-frame
+re-trace) are not provided. Lamp switches therefore fade over the history length unless
+`--reset-on-source-change` is used. Verification: measure the fade with a `trail_lag`-style check
+on a source switch in M5.
+
+## KI-020 — info — denoised mode — moving mirrors not covered by the PSR motion
+
+The virtual motion assumes the mirror plane did not move (D-030). No mirror moves in the proof.
+
+## KI-021 — info — denoised mode — DLSS Super Resolution not evaluated
+
+Streamline was not added in M4 (the native path came first; the SDK is a separate proprietary
+dependency). The bilinear `--internal` path is the only scaled presentation.
 
 ## KI-012 — info — all builds — raw mode is noisy by design
 

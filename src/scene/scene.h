@@ -64,6 +64,9 @@ public:
     std::uint32_t MeshIndex(MeshId id) const { return id.value; }
     std::uint32_t TotalTriangles() const;
     std::uint32_t MaterialRevision() const { return materialRevision_; }
+    // FNV-1a over every mesh, material, and instance (name, transform, material index): identifies
+    // the content in benchmark metadata (spec §16). Independent of transform history.
+    std::uint64_t ContentHash() const;
 
 private:
     Instance* FindInstanceMutable(InstanceId id);

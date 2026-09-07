@@ -14,6 +14,17 @@ static const uint LC_VIEW_DEPTH = 2;
 static const uint LC_VIEW_BARYCENTRICS = 3;
 static const uint LC_VIEW_FRONT_FACE = 4;
 static const uint LC_VIEW_PRIMITIVE_IDS = 5;
+// Views 6 and up exist only in denoised mode (drawn by post/compose.hlsl on the display image;
+// camera_view.hlsl shows normals for them). Diagnostic colours never enter the linear output.
+static const uint LC_VIEW_MOTION = 6;       // World-space motion of the guide surface: rgb = xyz * 10 + 0.5.
+static const uint LC_VIEW_VIEWZ = 7;        // |view Z| 0 m black to 20 m white.
+static const uint LC_VIEW_HISTORY = 8;      // NRD history: red = reset/rejected, green = diffuse age, blue = specular age (fraction of the bound).
+static const uint LC_VIEW_DIFFUSE = 9;      // Denoised diffuse radiance (modulated), exposed.
+static const uint LC_VIEW_SPECULAR = 10;    // Denoised specular radiance (modulated), exposed.
+static const uint LC_VIEW_RAW = 11;         // This frame's recomposed raw sample, exposed.
+static const uint LC_VIEW_DIRECT = 12;      // Direct light at the guide surface (this frame's sample), exposed.
+static const uint LC_VIEW_INDIRECT = 13;    // Denoised diffuse + specular minus the direct sample, exposed.
+static const uint LC_VIEW_VALIDATION = 14;  // NRD validation overlay blended over the production image.
 
 // Hit-info texel x component when the camera ray leaves the scene.
 static const uint LC_MISS_ID = 0xFFFFFFFFu;
@@ -65,6 +76,32 @@ struct FrameConstants {
     float rayTMax;          // Camera ray end distance in metres.
     float aspectRatio;      // renderSize.x / renderSize.y.
     uint seed;              // Deterministic sampling seed.
+};
+
+// GuideConstants.flags bits (denoised mode).
+static const uint LC_GUIDE_FLAG_GLOBAL_JITTER = 1u;  // One sub-pixel offset for every pixel this frame; NRD receives the same offset.
+static const uint LC_GUIDE_FLAG_RESET = 2u;          // Compose restarts the raw accumulation this frame.
+static const uint LC_GUIDE_FLAG_OVERLAY = 4u;        // Compose draws GuideConstants.viewMode on the display image.
+static const uint LC_GUIDE_FLAG_VALIDATION = 8u;     // NRD wrote its validation overlay this frame.
+
+// NRD material ids (2 bits in the normal-roughness guide). Diffuse and emitter surfaces share one
+// id, conductors another, so the denoiser never mixes a lobe that a neighbour does not have.
+static const uint LC_MATERIAL_ID_DIFFUSE = 0u;
+static const uint LC_MATERIAL_ID_CONDUCTOR = 1u;
+
+// Hit distance reported when the continuation ray leaves the scene: far, saturates the normalization.
+static const float LC_MISS_HIT_DISTANCE = 1.0e5f;
+
+// 48 bytes. Root constant buffer b2 for the guided trace, compose, and upscale passes.
+struct GuideConstants {
+    float2 jitterPixels;   // Sub-pixel offset in [-0.5, 0.5) added to the pixel centre under LC_GUIDE_FLAG_GLOBAL_JITTER.
+    uint2 outputSize;      // Presented size for the upscale pass (equals renderSize without scaling).
+    float3 hitDistParams;  // REBLUR hit-distance normalization (A, B, C) in metres (nrd::ReblurHitDistanceParameters).
+    float denoisingRange;  // Metres. Misses write a view Z beyond it so NRD skips the pixel.
+    uint flags;            // LC_GUIDE_FLAG_*.
+    uint historyFrames;    // NRD history bound in frames (scales the history view).
+    float exposure;        // Display scale applied by compose before sRGB encoding (does not touch radiance).
+    uint viewMode;         // LC_VIEW_* overlay when LC_GUIDE_FLAG_OVERLAY is set.
 };
 
 // 32 bytes. Root constant buffer b1 for the path tracer.

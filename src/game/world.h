@@ -131,6 +131,10 @@ class World {
 public:
     explicit World(TwoRoomLevel level);
 
+    // Back to the initial state (player start, door closed, lamp on its floor socket and on, threat
+    // at the path start) and writes every transform; the caller treats it as a camera cut.
+    void Reset();
+
     void Tick(const InputFrame& input, float dt);
 
     // Writes interpolated transforms into the scene for everything that moved and returns whether
