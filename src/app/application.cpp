@@ -19,6 +19,7 @@
 #include "render/capture.h"
 #include "render/renderer.h"
 #include "scene/builtin_scenes.h"
+#include "scene/scene_file.h"
 #include "scene/two_room_level.h"
 
 #define PSAPI_VERSION 2
@@ -231,15 +232,42 @@ int Application::RunListAdapters() {
 }
 
 int Application::RunRender() {
-    // Scene first: a bad scene name is a usage error and needs no GPU.
+    // The approved asset root sits beside the executable (spec §16, §17: nothing is fetched during play).
+    SetAssetRoot(files::ExecutableDirectory() / "assets");
+
+    // Scene first: a bad scene name or file is a usage error and needs no GPU.
     const bool simulated = options_.play || options_.replay.has_value();
     std::optional<SceneDescription> staticDesc;
     std::unique_ptr<game::World> world;
     std::optional<game::Replay> replay;
     game::Replay recording;
+    // The scene file behind the two-room level (the built-in name or --scene-file); reloads re-read it.
+    std::filesystem::path levelFile = kTwoRoomSceneFile;
+    std::uint64_t sceneContentHash = 0;
+    auto loadLevel = [&](std::optional<TwoRoomLevel>& out) -> bool {
+        SceneFileResult r = LoadSceneFile(levelFile, AssetRoot());
+        if (!r.Ok()) {
+            log::Error("scene file '{}' is invalid ({} problem(s)):", r.sourceName, r.errors.size());
+            for (const std::string& e : r.errors) log::Error("  {}", e);
+            return false;
+        }
+        sceneContentHash = r.contentHash;
+        out = std::move(*r.level);
+        log::Info("scene file '{}' loaded: content hash {:016x}, {} instances, {} materials", r.sourceName, r.contentHash,
+                  out->description.scene.Instances().size(), out->description.scene.Materials().size());
+        return true;
+    };
+    if (options_.sceneFile) {
+        levelFile = *options_.sceneFile;
+    }
+    const bool fileLevel = options_.sceneFile.has_value() || options_.scene == "two_room";
+    std::optional<TwoRoomLevel> level;
+    if (fileLevel && !loadLevel(level)) {
+        return kExitUsage;
+    }
     if (simulated) {
-        if (options_.scene != "two_room") {
-            log::Error("--play and --replay drive the 'two_room' scene; got '{}'", options_.scene);
+        if (!fileLevel) {
+            log::Error("--play and --replay drive the 'two_room' scene (or a --scene-file); got '{}'", options_.scene);
             return kExitUsage;
         }
         if (options_.replay) {
@@ -249,14 +277,19 @@ int Application::RunRender() {
                 log::Error("{}", error);
                 return kExitUsage;
             }
-            if (!replay->scene.empty() && replay->scene != options_.scene) {
-                log::Error("replay '{}' was recorded for scene '{}', not '{}'", options_.replay->string(), replay->scene, options_.scene);
+            if (!replay->scene.empty() && replay->scene != level->description.name) {
+                log::Error("replay '{}' was recorded for scene '{}', not '{}'", options_.replay->string(), replay->scene, level->description.name);
                 return kExitUsage;
             }
         }
-        world = std::make_unique<game::World>(BuildTwoRoomLevel());
-        recording.scene = options_.scene;
+        world = std::make_unique<game::World>(std::move(*level));
+        level.reset();
+        recording.scene = world->Level().description.name;
         recording.seed = options_.seed;
+    } else if (fileLevel) {
+        staticDesc = level->description;  // The level rendered statically (threat parked, lamp on its socket).
+        level.reset();
+        staticDesc->camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
     } else {
         staticDesc = BuildBuiltinScene(options_.scene);
         if (!staticDesc) {
@@ -267,8 +300,12 @@ int Application::RunRender() {
         }
         staticDesc->camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
     }
+    if (options_.reloadTest && !world) {
+        log::Error("--reload-test needs a scene file level (--scene two_room or --scene-file) with --replay or --play");
+        return kExitUsage;
+    }
     const RenderMode mode = ToRenderMode(options_.mode);
-    Scene& scene = world ? world->GetScene() : staticDesc->scene;
+    Scene* scenePtr = world ? &world->GetScene() : &staticDesc->scene;
     const std::string sceneName = world ? world->Level().description.name : staticDesc->name;
 
     // Device.
@@ -324,7 +361,7 @@ int Application::RunRender() {
         if (scaledOutput) {
             renderer.SetOutputSize(initialWidth, initialHeight);
         }
-        renderer.SetScene(scene);
+        renderer.SetScene(*scenePtr);
         renderer.SetMode(mode);
         IntegratorSettings integrator;
         integrator.maxHits = options_.maxHits;
@@ -403,7 +440,8 @@ int Application::RunRender() {
         };
         std::vector<TrailRecord> trailRecords;
         bool keepRenderedInstances = false;
-        if (replay && world) {
+        const bool benchmark = options_.benchmarkSeconds > 0.0f;  // A benchmark never reads back per frame (spec §17: timing only).
+        if (replay && world && !benchmark) {
             for (std::size_t i = 0; i < replay->checks.size(); ++i) {
                 const game::ReplayCheck& c = replay->checks[i];
                 if (game::IsPerFrameCheck(c) && !frozenReplay) {
@@ -412,7 +450,7 @@ int Application::RunRender() {
                 if (c.kind == "motion" || c.kind == "static_motion") keepRenderedInstances = true;
             }
         }
-        const bool perFrameReadback = options_.captureSequence.has_value() || !trailRecords.empty();
+        const bool perFrameReadback = !benchmark && (options_.captureSequence.has_value() || !trailRecords.empty());
         std::vector<Instance> renderedInstances;
         JsonWriter sequenceLog;
         std::uint32_t sequenceFrames = 0;
@@ -434,7 +472,8 @@ int Application::RunRender() {
 
         // Benchmark (spec §17 protocol): loop the replay, exclude the warm-up, record every frame's
         // CPU and GPU time, then write the report. No per-frame readback, no validation.
-        const bool benchmark = options_.benchmarkSeconds > 0.0f;
+        std::uint32_t reloadCount = 0;
+        std::uint32_t reloadFailures = 0;
         std::vector<double> benchCpuMs;
         std::vector<double> benchGpuMs;
         std::map<std::string, std::pair<double, std::uint32_t>> benchPasses;
@@ -533,19 +572,40 @@ int Application::RunRender() {
                     simulation.RunTicks(1, [&](std::uint64_t tick, float dt) { world->Tick(replay->InputAt(tick), dt); });
                     alpha = 1.0f;
                 }
-                worldChanged = world->WriteRenderScene(scene, alpha);
+                worldChanged = world->WriteRenderScene(*scenePtr, alpha);
                 if (worldChanged) ++motionFrames;
                 camera = world->CameraAt(alpha);
                 camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
             }
 
+            // Scene reload (spec §16): parse and validate first; only a valid document replaces the world, at
+            // this frame boundary after a full GPU wait, with the temporal history reset. R in play mode, or
+            // the --reload-test hook at frame 2.
+            const bool reloadRequested = world && ((options_.play && window && window->Input().keyPressed['R']) || (options_.reloadTest && frameIndex == 2));
+            if (reloadRequested) {
+                std::optional<TwoRoomLevel> fresh;
+                if (loadLevel(fresh)) {
+                    queue.WaitIdle();
+                    world = std::make_unique<game::World>(std::move(*fresh));
+                    scenePtr = &world->GetScene();
+                    renderer.SetScene(*scenePtr);
+                    renderer.ResetHistory();
+                    simulation = game::Simulation(tickRate);
+                    ++reloadCount;
+                    log::Info("scene reloaded ({}): world reset, history reset, frame {}", reloadCount, frameIndex);
+                } else {
+                    log::Warn("scene reload refused: the current scene stays in place");
+                    ++reloadFailures;
+                }
+            }
+
             // Test hook (spec §19, reset correctness): every emitter off and an explicit history reset.
             if (options_.blackoutAtFrame >= 0 && frameIndex == static_cast<std::uint32_t>(options_.blackoutAtFrame)) {
                 std::uint32_t switched = 0;
-                const std::vector<Material>& materials = scene.Materials();
+                const std::vector<Material>& materials = scenePtr->Materials();
                 for (std::uint32_t i = 0; i < materials.size(); ++i) {
                     if (materials[i].type == MaterialType::Emitter && materials[i].emitterOn) {
-                        scene.SetEmitterOn(i, false);
+                        scenePtr->SetEmitterOn(i, false);
                         ++switched;
                     }
                 }
@@ -554,7 +614,7 @@ int Application::RunRender() {
             }
 
             RenderSnapshot snapshot;
-            snapshot.scene = &scene;
+            snapshot.scene = scenePtr;
             snapshot.camera = camera;
             snapshot.frameIndex = frameIndex;
             snapshot.view = options_.view;
@@ -580,7 +640,7 @@ int Application::RunRender() {
                 LC_CHECK_HR(hr);
             }
             if (keepRenderedInstances) {
-                renderedInstances = scene.Instances();  // The image just rendered: current and previous transforms.
+                renderedInstances = scenePtr->Instances();  // The image just rendered: current and previous transforms.
             }
             if (perFrameReadback) {
                 const bool inSequence = options_.captureSequence && frameIndex >= options_.captureFrom &&
@@ -655,7 +715,7 @@ int Application::RunRender() {
                     }
                 }
             }
-            scene.CommitRenderedFrame();
+            scenePtr->CommitRenderedFrame();
             ++frameIndex;
 
             const double cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
@@ -789,7 +849,7 @@ int Application::RunRender() {
                 report.buildDirty = build::kGitDirty;
                 report.buildConfig = build::kConfig;
                 report.scene = sceneName;
-                report.sceneContentHash = scene.ContentHash();
+                report.sceneContentHash = sceneContentHash != 0 ? sceneContentHash : scenePtr->ContentHash();
                 for (const auto& [name, hash] : renderer.ShaderHashes()) report.shaderHashes.push_back({name, hash});
                 report.denoiserVersion = mode == RenderMode::Denoised ? std::format("nrd-reblur-{}", Renderer::DenoiserVersion()) : "none";
                 report.replay = options_.replay->string();
@@ -874,6 +934,8 @@ int Application::RunRender() {
                 meta.outputHeight = swapChain ? swapChain->Height() : renderer.OutputHeight();
                 meta.reconstruction = mode == RenderMode::Denoised ? std::format("nrd-reblur-{}", Renderer::DenoiserVersion()) : "none";
                 meta.historyResets = renderer.HistoryResetCount();
+                meta.sceneFile = fileLevel ? levelFile.generic_string() : std::string();
+                meta.sceneContentHash = sceneContentHash != 0 ? sceneContentHash : scenePtr->ContentHash();
                 meta.adapter = WideToUtf8(device->AdapterDetails().description);
                 meta.driver = device->AdapterDetails().driverVersion;
                 meta.buildCommit = build::kGitCommit;
@@ -1219,6 +1281,13 @@ int Application::RunRender() {
                         log::Error("TLAS rebuilt {} times but the world changed transforms in {} frames", renderer.TlasRebuildCount(), motionFrames);
                         ++problems;
                     }
+                }
+
+                if (options_.reloadTest) {
+                    const bool ok = reloadCount == 1 && reloadFailures == 0 && renderer.HistoryResetCount() >= 2;
+                    log::Info("reload test: {} reload(s), {} refusal(s), {} history reset(s), content hash {:016x} -> {}", reloadCount, reloadFailures,
+                              renderer.HistoryResetCount(), sceneContentHash, ok ? "PASS" : "FAIL");
+                    if (!ok) ++problems;
                 }
 
                 device->DrainInfoQueue();

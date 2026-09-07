@@ -40,6 +40,7 @@ to pass. When a scene was redesigned (T07, see below) the tolerance stayed and t
 | `test_reconstruction.cpp` | NRD matrix conversion to column-major; the Halton(2,3) jitter stays within half a pixel, does not repeat within its sequence, and wraps |
 | `test_temporal_checks.cpp` | Trail-lag metric: measured lag on synthetic series, pass/fail against the limit, and invalid series (never leaves, too short, re-entry, no contrast) reported instead of guessed |
 | `test_benchmark.cpp` | Nearest-rank percentiles, median, counts above 33.3 / 50 ms; the report parses back as JSON with every required section |
+| `test_scene_file.cpp` | The golden `two_room.json` reproduces the proof level (material and instance counts, circuit states, door hinge, sockets, path, markers, the derived mirror aim within 1e-5, collider flags, deterministic reload hash); every validation rule rejects a patched document with a message naming the list, identifier, or field (schema, JSON syntax, duplicate id, unknown material, reflectance range, unknown circuit, box without centre, negative extent, opening leaving no wall, non-axis facing, unknown marker, objectives not implemented, zero speed); limits (object count, file size); asset-root containment (parent traversal and absolute paths refused, missing file reported) |
 
 ## GPU tests (`tests/gpu/CMakeLists.txt`)
 
@@ -121,6 +122,7 @@ checks at tick N are evaluated at the end).
 | `gpu_denoised_trail_lag` | `t12_mirror_motion.json`, 930 frames, per-frame readback | Trail lag (below) on the 5x5 mirror patch after the threat leaves it: measured 0 frames against the 6-frame (100 ms) limit; the denoised luminance follows the occupancy of the patch frame by frame (1.0e-3 with 25 threat pixels, 2.6e-3 with 5, 3.0e-3 with 0) |
 | `gpu_denoised_resize_test`, `gpu_denoised_scaled_resize_test` | windowed | The NRD instance is recreated on every resize (native, and 960x540 internal with the presented size following the window); 0 debug-layer errors |
 | `gpu_benchmark_smoke` | `--benchmark-seconds 2 --warmup-seconds 0.5`, headless | The benchmark loop runs, restarts the replay, and writes a report with every §21 section |
+| `gpu_scene_reload_test` | `t06_door_light.json`, denoised, `--reload-test --frames 6` | The scene file is reloaded at frame 2 (parse and validate, GPU wait, new world, upload, history reset); one reload, no refusal, two history resets, 0 debug-layer errors. All two_room tests now run on the JSON level |
 
 **Trail lag** (the automated measure of spec §19 "no obvious obsolete silhouette persisting longer
 than 100 ms"): per frame, the mean denoised luminance of the patch and the number of patch pixels

@@ -52,6 +52,10 @@ add_test(NAME gpu_denoised_motion_mirror_threat COMMAND LastCircuit --scene two_
 add_test(NAME gpu_denoised_trail_lag COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_mirror_motion.json" --mode denoised --frames 930 --validate --headless)
 add_test(NAME gpu_denoised_resize_test COMMAND LastCircuit --scene rt_boxes --mode denoised --resize-test --vsync off)
 add_test(NAME gpu_denoised_scaled_resize_test COMMAND LastCircuit --scene rt_boxes --mode denoised --internal 960x540 --resize-test --vsync off)
+# M3.5: scene files (spec §16). The two_room tests above run on assets/scenes/two_room.json; the reload
+# test swaps the scene at a frame boundary after parse + validate and expects the history to reset.
+add_test(NAME gpu_scene_reload_test COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t06_door_light.json" --mode denoised --reload-test --frames 6 --validate --headless)
+add_test(NAME gpu_scene_file_option COMMAND LastCircuit --scene-file scenes/two_room.json --mode reference --spp 8 --validate --headless)
 # Benchmark command (spec §21): a short headless run must produce a complete report.
 add_test(NAME gpu_benchmark_smoke COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_mirror_motion.json" --mode denoised
          --benchmark-seconds 2 --warmup-seconds 0.5 --report "${CMAKE_BINARY_DIR}/artifacts/benchmark_smoke.json" --headless)
@@ -80,7 +84,7 @@ set(_lc_gpu_tests
     gpu_t06_door_open gpu_t06_door_closed gpu_t06_lamp_on_shelf gpu_t06_lamp_off gpu_replay_motion_tlas_rebuilds
     gpu_denoised_split_lossless gpu_denoised_box_static gpu_denoised_mirror_box gpu_denoised_metals_room gpu_denoised_blackout_reset
     gpu_denoised_motion_lamp gpu_denoised_motion_mirror_threat gpu_denoised_trail_lag gpu_denoised_resize_test gpu_denoised_scaled_resize_test
-    gpu_benchmark_smoke
+    gpu_benchmark_smoke gpu_scene_reload_test gpu_scene_file_option
     gpu_t08_box_strategies_agree gpu_t07_agrees_with_higher_sample_reference gpu_t08_box_depth_truncation_report)
 set_tests_properties(${_lc_gpu_tests} PROPERTIES SKIP_RETURN_CODE 3 LABELS gpu TIMEOUT 900)
 set_tests_properties(gpu_resize_test gpu_denoised_resize_test gpu_denoised_scaled_resize_test PROPERTIES LABELS "gpu;window" RUN_SERIAL TRUE)

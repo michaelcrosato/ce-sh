@@ -27,6 +27,8 @@ struct CaptureMetadata {
     std::uint32_t outputHeight = 0;
     std::string reconstruction = "none";  // "none" or "nrd-reblur-<version>" (denoised mode).
     std::uint64_t historyResets = 0;
+    std::string sceneFile;                // Scene file behind the level (empty for generated test scenes).
+    std::uint64_t sceneContentHash = 0;   // FNV-1a of the scene file, or of the generated scene's content.
     std::string adapter;
     std::string driver;
     std::string buildCommit;

@@ -184,6 +184,15 @@ Format: date, issue, evidence, decision, consequence, rollback.
 - Decision: per-frame patch luminance and entity-pixel counts, a departure frame, a settled value 20–32 frames after departure, and the lag to reach 80 % of the step; limit 6 frames (100 ms). Invalid series (never leaves, too short, re-entry, no contrast) fail with a reason instead of passing.
 - Consequence: the metric measures the reflected threat's silhouette specifically (spec §19: no global averages).
 
+## D-036 (2026-09-06) Scene files describe kit parts and entities, not triangles
+
+- Decision: schema 1 lists materials, circuits, objects as room-kit parts (slab, wall with opening, door leaf, emitter rectangle, box, quad), sockets, paths, markers, and the proof's entities; the loader builds the same kit calls the C++ builder used, so wall thickness, door overlap, and winding rules stay in code. Mesh files (the GLB subset) come later as another object kind.
+- Consequence: the file cannot express baked lighting; validation is complete before any building; every error names its list, id, or field, and all errors are reported together.
+
+## D-037 (2026-09-06) Reload never replaces a working scene with a broken one
+
+- Decision: parse and validate first; the swap happens at the frame boundary after a full GPU wait (new world, upload, history reset, simulation restart). The asset root is `<executable dir>/assets`; scene paths that leave it are refused. The diagnostic panel (Dear ImGui) is deferred to M5 with the settings UI; reload results go to the log and the title.
+
 ## D-013 (2026-09-06) Repository workflow for this session
 
 - Decision: work on branch `m0-m1-bootstrap` with small commits; nothing is pushed; `build/` and `artifacts/` are ignored. The owner decides on merging.

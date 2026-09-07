@@ -54,6 +54,8 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     ArgParser p;
     p.AddFlag("help", "Print this help and exit.");
     p.AddStringOption("scene", "Built-in scene name (see docs/TESTS.md for the list).", "rt_triangle");
+    p.AddStringOption("scene-file", "Scene file inside the asset root (for example scenes/two_room.json); replaces --scene.", "");
+    p.AddFlag("reload-test", "Render, reload the scene file at a frame boundary, render again, and verify (headless).");
     p.AddIntOption("width", "Window client width in pixels (and the trace width unless --internal is given).", 1280);
     p.AddIntOption("height", "Window client height in pixels (and the trace height unless --internal is given).", 720);
     p.AddStringOption("internal", "Internal trace size WxH when it differs from the window (e.g. 1280x720); the display is resampled.", "");
@@ -119,6 +121,15 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     AppOptions o;
     o.help = p.Has("help");
     o.scene = p.GetString("scene");
+    if (const std::string s = p.GetString("scene-file"); !s.empty()) {
+        o.sceneFile = std::filesystem::path(s);
+        if (p.Has("scene")) {
+            result.error = "--scene-file replaces --scene; give one of them";
+            return result;
+        }
+        o.scene = "two_room";  // Scene files describe the two-room proof's entities.
+    }
+    o.reloadTest = p.Has("reload-test");
 
     const int width = p.GetInt("width");
     const int height = p.GetInt("height");

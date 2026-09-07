@@ -17,6 +17,8 @@ add_library(lc_scene STATIC
     rooms.h
     scene.cpp
     scene.h
+    scene_file.cpp
+    scene_file.h
     two_room_level.cpp
     two_room_level.h
 )

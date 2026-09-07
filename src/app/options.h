@@ -23,6 +23,8 @@ struct CropRect {
 
 struct AppOptions {
     std::string scene = "rt_triangle";
+    std::optional<std::filesystem::path> sceneFile;  // A scene file inside the asset root (replaces --scene).
+    bool reloadTest = false;                         // Headless: render, reload the scene file, render, validate.
     std::uint32_t width = 1280;         // Window client size; also the trace size unless --internal is given.
     std::uint32_t height = 720;
     std::uint32_t internalWidth = 0;    // --internal WxH: trace and denoise size; the display is resampled to the window (0 = same).

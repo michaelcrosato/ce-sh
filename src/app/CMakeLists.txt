@@ -20,6 +20,10 @@ if(WIN32)
     )
     target_link_libraries(LastCircuit PRIVATE lc_app_options lc_render lc_graphics lc_platform lc_game lc_scene lc_core lc_options advapi32)
     add_dependencies(LastCircuit lc_shaders)
+    # Assets live beside the executable (the approved asset root; the M7 package keeps this layout).
+    add_custom_command(TARGET LastCircuit POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:LastCircuit>/assets"
+        COMMENT "Copying assets beside LastCircuit.exe")
     set_target_properties(LastCircuit PROPERTIES
         VS_DEBUGGER_COMMAND_ARGUMENTS "--scene rt_boxes"
         VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")

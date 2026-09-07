@@ -97,6 +97,13 @@ Denoised mode (M4):
 .\build\windows-release\bin\LastCircuit.exe --scene two_room --replay .\tests\replay\t12_mirror_motion.json --mode denoised --benchmark-seconds 60 --warmup-seconds 5 --report .\artifacts\benchmark.json --vsync off
 ```
 
+Scene files (M3.5): the two-room level is `assets/scenes/two_room.json` (schema 1, copied beside
+the executable by the build). `--scene-file scenes/<name>.json` loads another file from the asset
+root (paths outside it are refused); in play mode **R** reloads the current file at the next frame
+boundary (an invalid file is reported line by line and the running scene stays);
+`--reload-test` with `--replay` or `--play` does one reload at frame 2 headlessly and verifies it.
+Captures and benchmark reports record the file and its content hash.
+
 `--history-frames`, `--prepass-radius`, `--blur-radius`, `--no-antifirefly`,
 `--validation-overlay`, and `--reset-on-source-change` tune the denoiser (docs/RENDERING.md);
 `--blackout-at-frame N` is the reset-correctness test hook. The benchmark loops the replay
@@ -104,7 +111,7 @@ Denoised mode (M4):
 (build and content hashes, device, sizes, settings, CPU and GPU frame-time distributions with
 p95/p99 and counts above 33.3/50 ms, memory, replay identifier, durations).
 
-Runtime requirements: the `shaders` directory must stay beside `LastCircuit.exe`; the D3D12 debug
+Runtime requirements: the `shaders` and `assets` directories must stay beside `LastCircuit.exe`; the D3D12 debug
 layer is on by default in Debug builds (`--debug-layer off` disables it, `--gpu-validation` adds
 GPU-based validation). Unknown options are errors.
 

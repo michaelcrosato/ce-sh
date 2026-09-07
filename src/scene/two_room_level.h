@@ -24,8 +24,18 @@ struct SocketSpec {
     float yaw = 0.0f;         // Lamp facing.
 };
 
+struct CircuitState {
+    std::string id;
+    bool on = true;
+};
+
 struct TwoRoomLevel {
     SceneDescription description;   // Static scene, camera at the mirror check position, static expectations.
+    std::string sceneFile;          // Source scene file (assets/scenes/two_room.json) and its content hash.
+    std::uint64_t contentHash = 0;
+    std::vector<CircuitState> circuits;   // Initial circuit states from the file.
+    std::vector<SocketSpec> sockets;      // Every interaction socket (floorSocket and shelfSocket are two of them).
+    std::vector<InstanceId> colliders;    // Instances that block movement (M5 collision), from the file's collider flags.
 
     DoorHandle door;                // Room A door into the hall.
     std::uint32_t lampMaterial = 0; // Emitter material of the lamp face.
@@ -54,9 +64,11 @@ struct TwoRoomLevel {
 // The fixture origin is its base; the housing box is raised by its half height so it rests on the socket.
 inline constexpr float kLampBaseOffset = 0.05f;
 
-// Builds the level with the threat parked at threatCheckPosition (so the static scene proves the
-// mirror identity) and the lamp on its floor socket, switched on.
+// Loads assets/scenes/two_room.json from the asset root (scene_file.h) with the threat parked at
+// threatCheckPosition (so the static scene proves the mirror identity) and the lamp on its floor
+// socket, switched on. Throws lc::Error listing every problem when the file is invalid.
 TwoRoomLevel BuildTwoRoomLevel();
+inline constexpr const char* kTwoRoomSceneFile = "scenes/two_room.json";
 
 // Fixture transforms shared by the scene builder and the game: housing and face from one pose.
 math::Mat4 LampHousingTransform(const PoseSpec& pose);

@@ -5,6 +5,7 @@
 #include "platform/files.h"
 
 #include <algorithm>
+#include <format>
 
 namespace lc {
 
@@ -52,6 +53,8 @@ bool WriteCapture(const std::filesystem::path& dir, const std::string& baseName,
     j.Field("reconstruction", meta.reconstruction);
     j.Field("framesSinceHistoryReset", images.framesSinceReset);
     j.Field("historyResets", meta.historyResets);
+    j.Field("sceneFile", meta.sceneFile);
+    j.Field("sceneContentHash", std::format("{:016x}", meta.sceneContentHash));
     j.Field("adapter", meta.adapter);
     j.Field("driver", meta.driver);
     j.Field("buildCommit", meta.buildCommit);

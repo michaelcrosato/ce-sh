@@ -83,10 +83,11 @@ With fixed exposure 1 the hall and the inspection room are nearly black on scree
 levels are a design choice; the radiance checks are unaffected). `--exposure` scales the display
 only; a documented tone curve and an accessibility brightness control arrive with M5/M7.
 
-## KI-017 — info — play mode — no on-screen prompts
+## KI-017 — info — play mode — no on-screen prompts or diagnostic panel
 
-The interaction target is logged (`[E] door`) instead of drawn; a diagnostic panel (Dear ImGui
-evaluation) is planned with the scene-file reload command.
+The interaction target is logged (`[E] door`) instead of drawn, and the scene reload (R) reports
+to the log and the window title; the diagnostic panel (Dear ImGui) is deferred to M5 with the
+settings UI (spec §16 asks for "a reload command and a small diagnostic panel"; the command exists).
 
 ## KI-018 — medium — denoised mode — spatial filtering biases sharp lighting gradients
 

@@ -13,7 +13,8 @@ State at milestone M1. Everything below exists in the code; nothing is a plan.
 | `lc_platform` | `src/platform` | Win32 window and events, file helpers, HRESULT reporting | `lc_core` |
 | `lc_graphics` | `src/graphics/d3d12` | Device/adapter/feature checks, queue + fence, swap chain, descriptor heap, buffers, UAV textures + readback, upload arena, timestamp queries, BLAS/TLAS, root signature + compute PSO | `lc_platform` |
 | `lc_render` | `src/render` | `SceneGpu` (geometry residency, BLAS per mesh, TLAS, per-frame instance/material/emitter tables), `Renderer` (diagnostic pass, path tracer in raw and reference modes, the denoised path: guided trace, NRD, compose, resampling; accumulation, readback, layout probe), `NrdDenoiser` (D3D12 backend for NRD's API), capture and sequence writers | `lc_graphics`, `lc_scene`, `NRD` |
-| `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks), `World` (player, door, lamp fixture, threat, interaction) | `lc_scene`, `lc_core` |
+| `lc_scene` (scene files) | `src/scene/scene_file.*` | Versioned JSON scene files: parse, validate every rule and limit, asset-root containment, then build the level through the room kit; `assets/scenes/two_room.json` is the proof level | `lc_core` (JSON reader) |
+| `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks), `World` (player, door, lamp fixture, threat, interaction, reset) | `lc_scene`, `lc_core` |
 | `LastCircuit.exe` | `src/app` | Modes (list adapters, windowed, headless, play, record, replay, validate, resize test, capture, stats), environment report, main loop | everything above |
 | `lc_cpu_tests.exe` | `tests/cpu` | Portable unit tests, including CPU runs of the committed replays | `lc_core`, `lc_scene`, `lc_game`, options, contracts |
 
@@ -91,7 +92,14 @@ any error-severity message.
 The application's test paths add a per-frame readback (frame sequences, trail-lag statistics) and
 the benchmark loop (replay restarts with a world reset that counts as a camera cut).
 
+Scene reload (spec §16): the file is parsed and validated first; every problem is logged and the
+running scene stays untouched on failure. A valid document replaces the world at the frame
+boundary after a full GPU wait (new `World`, scene upload, history reset, simulation restart).
+Assets are read from `<executable dir>/assets` only; relative scene paths are resolved against
+that root and refused when they leave it.
+
 ## Not yet present
 
-Collision (M5), DLSS reconstruction (deferred evaluation), audio (M5), scene files (M3.5), the
-objective and threat state machines (M5), the six-room level (M6). `docs/STATUS.md` names the next task.
+Collision (M5), DLSS reconstruction (deferred evaluation), audio (M5), the glTF/GLB subset and the
+diagnostic panel (§16, deferred), the objective and threat state machines (M5), the six-room level
+(M6). `docs/STATUS.md` names the next task.
