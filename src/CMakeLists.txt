@@ -1,5 +1,6 @@
 add_subdirectory(core)
 add_subdirectory(scene)
+add_subdirectory(game)
 if(WIN32)
     add_subdirectory(platform)
     add_subdirectory(graphics)
