@@ -1,0 +1,89 @@
+{
+  "schema": 2,
+  "name": "two_room",
+  "units": "metres",
+  "description": "Spec section 4 first proof: Room A (equipment) with a fixture, crate, portable lamp, and a door; an L-shaped hall with an emergency fixture; Room B (inspection) with a sink block, an angled flat mirror, and a lamp shelf. Walls 0.15 m, ceiling 2.8 m. No baked lighting.",
+  "materials": [
+    {"id": "painted_concrete", "type": "diffuse", "reflectance": [0.55, 0.55, 0.52]},
+    {"id": "rubber_floor", "type": "diffuse", "reflectance": [0.35, 0.35, 0.33]},
+    {"id": "ceiling", "type": "diffuse", "reflectance": [0.7, 0.7, 0.7]},
+    {"id": "crate", "type": "diffuse", "reflectance": [0.6, 0.35, 0.15]},
+    {"id": "painted_metal_door", "type": "diffuse", "reflectance": [0.45, 0.5, 0.55]},
+    {"id": "lamp_housing", "type": "diffuse", "reflectance": [0.12, 0.12, 0.12]},
+    {"id": "threat_metal", "type": "diffuse", "reflectance": [0.15, 0.15, 0.18]},
+    {"id": "sink_block", "type": "diffuse", "reflectance": [0.75, 0.75, 0.78]},
+    {"id": "lamp_shelf", "type": "diffuse", "reflectance": [0.8, 0.6, 0.2]},
+    {"id": "mirror", "type": "mirror", "reflectance": [0.9, 0.9, 0.9]},
+    {"id": "fixture_a", "type": "emitter", "radiance": [6.0, 5.8, 5.4], "reflectance": [0.02, 0.02, 0.02], "circuit": "a"},
+    {"id": "hall_emergency", "type": "emitter", "radiance": [5.0, 1.2, 0.8], "reflectance": [0.02, 0.02, 0.02], "circuit": "hall"},
+    {"id": "fixture_b", "type": "emitter", "radiance": [5.0, 4.9, 4.7], "reflectance": [0.02, 0.02, 0.02], "circuit": "b"},
+    {"id": "lamp_face", "type": "emitter", "radiance": [120.0, 112.0, 100.0], "reflectance": [0.02, 0.02, 0.02], "circuit": "lamp"},
+    {"id": "player_suit", "type": "diffuse", "reflectance": [0.3, 0.32, 0.36]}
+  ],
+  "circuits": [
+    {"id": "a", "on": true},
+    {"id": "hall", "on": true},
+    {"id": "b", "on": false},
+    {"id": "lamp", "on": true}
+  ],
+  "objects": [
+    {"id": "floor", "kind": "slab", "min": [-0.15, -0.15, -0.15], "max": [8.15, 0.0, 12.3], "material": "rubber_floor"},
+    {"id": "ceiling", "kind": "slab", "min": [-0.15, 2.8, -0.15], "max": [8.15, 2.95, 12.3], "material": "ceiling"},
+    {"id": "a_wall_neg_x", "kind": "slab", "min": [-0.15, 0.0, -0.15], "max": [0.0, 2.8, 4.15], "material": "painted_concrete"},
+    {"id": "a_h1_wall_neg_z", "kind": "slab", "min": [0.0, 0.0, -0.15], "max": [8.15, 2.8, 0.0], "material": "painted_concrete"},
+    {"id": "a_wall_pos_z", "kind": "slab", "min": [0.0, 0.0, 4.0], "max": [4.15, 2.8, 4.15], "material": "painted_concrete"},
+    {"id": "a_wall_pos_x", "kind": "wall_opening", "min": [4.0, 0.0, 0.0], "max": [4.15, 2.8, 4.0], "axis": "z", "opening": {"centre": 1.2, "width": 0.9, "height": 2.1}, "material": "painted_concrete"},
+    {"id": "east_wall", "kind": "slab", "min": [8.0, 0.0, -0.15], "max": [8.15, 2.8, 12.3], "material": "painted_concrete"},
+    {"id": "h1_wall_pos_z", "kind": "slab", "min": [4.15, 0.0, 2.4], "max": [5.6, 2.8, 2.55], "material": "painted_concrete"},
+    {"id": "h2_wall_neg_x", "kind": "slab", "min": [5.45, 0.0, 2.4], "max": [5.6, 2.8, 8.0], "material": "painted_concrete"},
+    {"id": "b_wall_neg_z", "kind": "wall_opening", "min": [4.0, 0.0, 8.0], "max": [8.0, 2.8, 8.15], "axis": "x", "opening": {"centre": 6.8, "width": 0.9, "height": 2.1}, "material": "painted_concrete"},
+    {"id": "b_wall_neg_x", "kind": "slab", "min": [3.85, 0.0, 8.0], "max": [4.0, 2.8, 12.3], "material": "painted_concrete"},
+    {"id": "b_wall_pos_z", "kind": "slab", "min": [3.85, 0.0, 12.15], "max": [8.15, 2.8, 12.3], "material": "painted_concrete"},
+    {"id": "door", "kind": "door_leaf", "hinge": [4.0, 0.0, 0.75], "widthDir": [0.0, 0.0, 1.0], "thicknessDir": [1.0, 0.0, 0.0], "width": 0.9, "height": 2.1, "thickness": 0.04, "inset": 0.005, "overlap": 0.01, "material": "painted_metal_door"},
+    {"id": "crate", "kind": "box", "half": [0.4, 0.4, 0.4], "centre": [0.8, 0.4, 3.0], "material": "crate"},
+    {"id": "fixture_a", "kind": "emitter_rect", "width": 0.8, "height": 0.8, "position": [2.0, 2.79, 2.0], "facing": [0.0, -1.0, 0.0], "material": "fixture_a"},
+    {"id": "hall_emergency", "kind": "emitter_rect", "width": 0.4, "height": 0.4, "position": [6.8, 2.79, 5.0], "facing": [0.0, -1.0, 0.0], "material": "hall_emergency"},
+    {"id": "fixture_b", "kind": "emitter_rect", "width": 0.8, "height": 0.8, "position": [6.0, 2.79, 10.0], "facing": [0.0, -1.0, 0.0], "material": "fixture_b"},
+    {"id": "sink_block", "kind": "box", "half": [0.4, 0.45, 0.3], "centre": [7.6, 0.45, 10.0], "material": "sink_block"},
+    {"id": "lamp_shelf", "kind": "slab", "min": [4.0, 0.9, 10.0], "max": [4.3, 0.95, 10.5], "material": "lamp_shelf"},
+    {"id": "mirror", "kind": "box", "half": [0.6, 0.8, 0.01], "centre": [6.4, 1.5, 12.0], "aim": {"camera": "mirror_check_camera", "cameraHeight": 1.6, "target": "threat_check", "targetHeight": 0.9}, "material": "mirror"},
+    {"id": "lamp_housing", "kind": "box", "half": [0.05, 0.05, 0.10], "material": "lamp_housing", "collider": false},
+    {"id": "lamp_face", "kind": "quad", "half": [0.03, 0.03], "material": "lamp_face"},
+    {"id": "threat_body", "kind": "box", "half": [0.25, 0.6, 0.2], "material": "threat_metal"},
+    {"id": "threat_head", "kind": "box", "half": [0.15, 0.15, 0.15], "material": "threat_metal"},
+    {"id": "player_torso", "kind": "box", "half": [0.18, 0.28, 0.12], "material": "player_suit", "collider": false},
+    {"id": "player_hand_l", "kind": "box", "half": [0.05, 0.04, 0.08], "material": "player_suit", "collider": false},
+    {"id": "player_hand_r", "kind": "box", "half": [0.05, 0.04, 0.08], "material": "player_suit", "collider": false}
+  ],
+  "sockets": [
+    {"id": "floor_a", "position": [3.0, 0.0, 0.9], "yaw": -1.5707963, "accepts": ["lamp"], "text": "floor socket"},
+    {"id": "shelf", "position": [4.25, 0.95, 10.25], "yaw": -1.5707963, "accepts": ["lamp"], "text": "shelf"}
+  ],
+  "paths": [
+    {"id": "threat_route", "points": [[4.6, 0.0, 1.9], [7.7, 0.0, 1.9]], "speed": 1.2, "mode": "ping_pong"}
+  ],
+  "markers": [
+    {"id": "player_start", "position": [2.5, 0.0, 1.2], "yaw": -1.5707963},
+    {"id": "mirror_check_camera", "position": [5.2, 0.0, 10.3], "yaw": 3.1415927},
+    {"id": "threat_check", "position": [7.0, 0.0, 1.9]},
+    {"id": "exit", "position": [0.9, 0.0, 0.9]}
+  ],
+  "entities": {
+    "player": {"start": "player_start", "torso": "player_torso", "handLeft": "player_hand_l", "handRight": "player_hand_r"},
+    "doors": [
+      {"id": "door", "object": "door"}
+    ],
+    "items": [
+      {"id": "lamp", "text": "lamp", "housing": "lamp_housing", "face": "lamp_face", "light": "lamp_face", "faceOffset": 0.101, "startSocket": "floor_a"}
+    ],
+    "threat": {"body": "threat_body", "head": "threat_head", "path": "threat_route", "parkAt": "threat_check"},
+    "mirror": {"object": "mirror", "checkCamera": "mirror_check_camera", "aimAt": "threat_check", "hallFloor": "floor"}
+  },
+  "objectives": [
+    {"id": "lamp_acquired", "kind": "take", "item": "lamp", "text": "Find the lamp and pick it up"},
+    {"id": "lamp_placed", "kind": "place", "item": "lamp", "socket": "shelf", "text": "Carry the lamp to the shelf in the inspection room"},
+    {"id": "lamp_retrieved", "kind": "take", "item": "lamp", "text": "Check the mirror, then take the lamp back"},
+    {"id": "escaped", "kind": "reach", "marker": "exit", "radius": 0.8, "requires": "lamp", "text": "Return to the exit in the equipment room with the lamp"}
+  ],
+  "objectiveComplete": "You made it out"
+}

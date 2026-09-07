@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "scene": "two_room",
+  "tickRate": 60,
+  "seed": 0,
+  "segments": [
+    { "from": 0, "to": 0, "interact": true },
+    { "from": 60, "to": 199, "moveZ": 1.0 },
+    { "from": 200, "to": 219, "lookDx": 0.15707963 },
+    { "from": 220, "to": 235, "moveZ": 1.0 },
+    { "from": 236, "to": 245, "lookDy": -0.07 },
+    { "from": 301, "to": 301, "interact": true }
+  ],
+  "checks": [
+    { "tick": 300, "kind": "patch_positive", "description": "T06: hall floor by the open door is lit by Room A's fixture through the real opening", "point": [4.6, 0.0, 1.2], "minimum": 0.005, "halfSize": 3 },
+    { "tick": 300, "kind": "hit", "description": "T06: the open leaf stands in the hall", "point": [4.5, 1.0, 0.75], "entity": "door" },
+    { "tick": 420, "kind": "patch_dark", "description": "T06: the closed door blocks Room A's light from the hall floor", "point": [4.6, 0.0, 1.2], "maximum": 0.002, "halfSize": 3 },
+    { "tick": 420, "kind": "hit", "description": "T06: the closed leaf fills the doorway", "point": [4.01, 1.0, 1.2], "entity": "door" }
+  ]
+}

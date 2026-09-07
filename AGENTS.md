@@ -45,7 +45,12 @@ Record architectural changes in `docs/DECISIONS.md`.
 Use the detailed milestone gates and acceptance tests in the specification.
 Do not expand the level while the moving mirror, lighting, or performance gate fails.
 
-## First task in an empty repository
+## Where things are
+
+Build and run: `docs/BUILD.md` (use `. .\tools\env.ps1` to put the bundled CMake on PATH).
+Tests and criteria: `docs/TESTS.md`. Current milestone, evidence, and the next task: `docs/STATUS.md`.
+
+## First task in an empty repository (completed 2026-09-06)
 
 Complete M0 and M1: environment audit, project setup, tests, device checks,
 and a real hardware-ray-traced geometry scene. Then proceed toward the

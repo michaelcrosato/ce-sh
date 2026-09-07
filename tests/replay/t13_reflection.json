@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "scene": "two_room",
+  "tickRate": 60,
+  "seed": 0,
+  "segments": [
+    {"from": 0, "to": 0, "interact": true},
+    {"from": 60, "to": 231, "moveZ": 1.0},
+    {"from": 232, "to": 241, "lookDx": -0.15707963},
+    {"from": 242, "to": 605, "moveZ": 1.0},
+    {"from": 606, "to": 669, "moveX": 1.0},
+    {"from": 670, "to": 701, "moveX": -1.0},
+    {"from": 702, "to": 712, "moveZ": 1.0},
+    {"from": 713, "to": 722, "lookDx": 0.0278}
+  ],
+  "checks": [
+    {"tick": 760, "kind": "hit", "description": "the mirror shows the player's placeholder torso (T13: the player is not omitted from reflections)", "point": [6.4, 1.35, 12.0], "entity": "player_torso"},
+    {"tick": 760, "kind": "not_visible", "description": "the torso is below the direct view at level pitch", "entity": "player_torso"},
+    {"tick": 760, "kind": "patch_positive", "description": "the reflected torso is lit (hall spill and the lamp on the floor socket)", "point": [6.4, 1.35, 12.0], "minimum": 0.000005}
+  ]
+}

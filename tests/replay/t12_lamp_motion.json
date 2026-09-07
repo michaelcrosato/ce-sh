@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "scene": "two_room",
+  "tickRate": 60,
+  "seed": 0,
+  "segments": [
+    {"from": 0, "to": 9, "lookDy": -0.11},
+    {"from": 10, "to": 10, "interact": true},
+    {"from": 11, "to": 20, "lookDy": 0.11},
+    {"from": 21, "to": 21, "interact": true},
+    {"from": 81, "to": 252, "moveZ": 1.0},
+    {"from": 253, "to": 262, "lookDx": -0.15707963},
+    {"from": 263, "to": 626, "moveZ": 1.0},
+    {"from": 627, "to": 690, "moveX": 1.0},
+    {"from": 691, "to": 700, "lookDx": -0.15707963},
+    {"from": 701, "to": 710, "lookDy": -0.10},
+    {"from": 711, "to": 711, "interact": true},
+    {"from": 801, "to": 801, "lamp": true}
+  ],
+  "checks": [
+    {"tick": 400, "kind": "hit", "description": "the carried lamp housing is in the lower right of the view", "pixel": [0.86, 0.9], "entity": "lamp_housing"},
+    {"tick": 400, "kind": "motion", "description": "guide motion of the carried lamp equals its rendered translation (player walking, camera-attached object)", "pixel": [0.86, 0.9], "entity": "lamp_housing", "tolerance": 0.0002},
+    {"tick": 400, "kind": "static_motion", "description": "the hall wall ahead has zero guide motion while the camera moves", "pixel": [0.2, 0.4]},
+    {"tick": 400, "kind": "denoised_patch_positive", "description": "hall floor ahead is lit in the denoised image", "pixel": [0.5, 0.85], "minimum": 0.0003}
+  ]
+}

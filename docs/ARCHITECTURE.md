@@ -1,0 +1,124 @@
+# Architecture
+
+State at milestone M1. Everything below exists in the code; nothing is a plan.
+
+## Modules and ownership
+
+| Library | Directory | Owns | Depends on |
+|---|---|---|---|
+| `lc_core` | `src/core` | Logging, errors, clock, strong ids, strict CLI parser, math (`Vec3`, `Mat4`, camera math), PNG/PFM encoders, JSON writer, generated `build_info.h` | nothing platform-specific |
+| `lc_scene` | `src/scene` | `MeshData` + validation, generated primitives, `Scene` registry (meshes, instances, stable ids, transform history), `Camera`, built-in test scenes with hit expectations | `lc_core` |
+| `lc_render_contracts` | `src/render` (headers) | CPU mirrors of the HLSL records (`gpu_layouts.h`), `ViewMode` | nothing |
+| `lc_app_options` | `src/app/options.*` | `AppOptions` from the command line | `lc_core`, contracts |
+| `lc_platform` | `src/platform` | Win32 window and events, file helpers, HRESULT reporting | `lc_core` |
+| `lc_graphics` | `src/graphics/d3d12` | Device/adapter/feature checks, queue + fence, swap chain, descriptor heap, buffers, UAV textures + readback, upload arena, timestamp queries, BLAS/TLAS, root signature + compute PSO | `lc_platform` |
+| `lc_render` | `src/render` | `SceneGpu` (geometry residency, BLAS per mesh, TLAS, per-frame instance/material/emitter tables), `Renderer` (diagnostic pass, path tracer in raw and reference modes, the denoised path: guided trace, NRD, compose, resampling; accumulation, readback, layout probe), `NrdDenoiser` (D3D12 backend for NRD's API), capture and sequence writers | `lc_graphics`, `lc_scene`, `NRD` |
+| `lc_scene` (scene files) | `src/scene/scene_file.*` | Versioned JSON scene files (schema 2, D-046): parse, validate every rule, cross-reference, and limit, asset-root containment, then build the level through the room kit (doors, items, sockets with accept lists, circuits powered by an item, the fan's generated hub and blades, objective steps); `assets/scenes/two_room.json` is the proof level and `six_room.json` the demo | `lc_core` (JSON reader) |
+| `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks, the threat behaviour), `CollisionWorld` (yaw-only boxes, capsule push-out, sphere sweep, segment tests), `World` (player with the capsule, doors that never trap and open with their circuit, items in the hand or the pocket with their sockets, circuits evaluated from item placement every tick, fans with a spin-up and spin-down, `Threat` with the patrol path or the hunt state machine on gameplay data and routing along the patrol polyline, placeholder body, interaction, the objective's step list with checkpoints, catch and restart, the world-state hash, events), `StateCheckLog` (world-state replay checks) | `lc_scene`, `lc_core` |
+| `lc_miniaudio` | `external/miniaudio` (built by `src/audio/CMakeLists.txt`) | miniaudio compiled once as C: WASAPI backend only, no decoding, encoding, generators, or resource manager | nothing |
+| `lc_audio` | `src/audio` | Generated clips with provenance (`clips.*`), the sound rules (`director.*`: inverse-square attenuation, pan from the listener's right axis, the occlusion factor, events that follow the world state, text cues), and the device layer (`audio_system.*`: a 24-voice pool on miniaudio, volumes per category, pause) | `lc_core`, `lc_miniaudio` |
+| `lc_imgui` | `external/imgui` (built by `src/ui/CMakeLists.txt`) | Dear ImGui core with the Win32 and D3D12 backends, third-party code compiled without `/WX` | `d3dcompiler` (backend start-up) |
+| `lc_ui` | `src/ui` | `ui::Ui`: interface frame (prompt, objective, cue, controls card, pause menu with `ui::Settings`, diagnostic panel) recorded into the back buffer after the present copy; the window message hook | `lc_imgui`, `lc_graphics`, `lc_platform` |
+| `LastCircuit.exe` | `src/app` | Modes (list adapters, windowed, headless, play, record, replay, validate, resize test, capture, stats, benchmark, reload test), environment report, main loop, interface state (pause, settings, diagnostics) | everything above |
+| `lc_cpu_tests.exe` | `tests/cpu` | Portable unit tests, including CPU runs of the committed replays | `lc_core`, `lc_scene`, `lc_game`, options, contracts |
+
+The scene and game layers (`lc_scene`, `lc_game`) contain no D3D12 types. The renderer reads a
+`RenderSnapshot` (scene pointer, camera, frame index, view mode) and never mutates the scene.
+
+## Data flow per frame (spec §9 order)
+
+```text
+Window::PumpMessages            window events (the interface hook sees every message first); raw mouse deltas and key
+                                edges accumulate until a simulation tick has read them (frames outnumber ticks);
+                                F1 and R consume their own edges per frame
+Simulation::Advance             live play: real time -> whole 60 Hz ticks (capped at 0.25 s per frame), remainder = alpha
+  or RunTicks                   replay: exactly one tick per frame, or all ticks up to --stop-at-tick before rendering
+World::Tick                     per tick: interaction edges (a door by id unless locked, an item into the hand or
+                                the pocket, the held item a socket accepts placed), the lamp switch, player against
+                                the colliders, doors (blocked leaves swing back), threat (path, or hunt states from
+                                the lamp state, distance, facing, line of sight; off-path moves routed along the
+                                patrol polyline), items (the carried lamp swept), circuits from item placement
+                                (emitters, fan targets, doors that open with a circuit), fans, the objective's step
+                                list and its checkpoint, catch -> restart from the checkpoint, the world-state hash
+StateCheckLog::AfterTick        replay checks on the world state (objective, threat state, catches, player position)
+World::WriteRenderScene(alpha)  interpolated poses -> Scene::SetTransform only for entities whose pose changed (a
+                                pocketed item follows the feet pose and is rewritten only when the player moves)
+audio::Director::Update         world snapshot (door/lamp/threat state, emitter states and transforms) -> loop and
+                                one-shot commands and text cues; AudioSystem::Update refreshes every voice's level and
+                                pan for the camera listener, occlusion through CollisionWorld::SegmentClear
+RenderSnapshot                  scene + camera (interpolated player eye) + frame index + view mode
+ui::Ui frame                    prompts, objective, cues, pause menu (settings applied at once), diagnostic panel
+Renderer::BeginFrame            wait for this slot's fence (2 frames in flight), reset allocator and upload arena,
+                                collect the GPU timings of the frame that last used the slot
+Renderer::RecordTrace           UAV barrier; SceneGpu::UpdateFrame writes instance, material, and emitter tables into the
+                                arena and rebuilds the TLAS only when a transform revision changed; then one of:
+                                  diag       camera_view dispatch
+                                  raw/ref    1 or N path_trace dispatches with accumulation resets on incompatible changes
+                                  denoised   path_trace_guided (1 spp, guides, split signals) -> NRD dispatches (history
+                                             reset events applied) -> compose (modulate, emission, exposure, raw invariant,
+                                             overlays on the display image only)
+Renderer::RecordCopyToBackBuffer [upscale to the presented size] display UAV->COPY_SOURCE, back buffer PRESENT->COPY_DEST,
+                                CopyResource, back
+Renderer::RecordOverlay         ui::Ui::Render into the back buffer (PRESENT->RENDER_TARGET->PRESENT); never in captures
+Renderer::EndFrame              resolve timestamps, close, ExecuteCommandLists, fence signal
+SwapChain::Present              vsync on/off; DXGI_ERROR_DEVICE_REMOVED triggers the DRED report and exit 1
+Scene::CommitRenderedFrame      previous transforms := the transforms just rendered (motion history refers to images)
+```
+
+Poses are interpolated by parameters (position, yaw, pitch, door angle), never by matrices, and
+placement events (lamp put on a socket) reset the interpolation so a discrete move does not sweep.
+Live play pauses the simulation while the cursor is released (Escape) or the window lacks focus:
+no ticks run and no catch-up burst follows. Replay is deterministic: the same file gives the same
+world state at every tick on any machine (CPU tests run the committed replays without a GPU).
+
+## Lifetimes and synchronization
+
+- One direct command queue, one fence. Frames in flight: 2. Each frame slot owns a command
+  allocator, a 4 MiB upload arena (constants, instance records, instance descriptors), and a fence
+  value. A slot is reused only after `WaitForFenceValue` on its previous frame.
+- One TLAS result buffer and one scratch buffer. The rebuild is recorded in the same command list
+  as the dispatch that consumes it; the single in-order queue plus UAV barriers before and after
+  the build order it against the previous frame's traversal.
+- Full GPU waits are used only for setup (scene upload and BLAS builds), swap-chain and output
+  resize, readback/capture, and the layout probe. They are logged as such and never occur in the
+  per-frame path.
+- Default-heap buffers are created in `COMMON` and rely on the documented promotion/decay rules
+  (buffers decay to `COMMON` after every `ExecuteCommandLists`). Textures track their own state in
+  `GpuTexture2D::Transition`. Acceleration structures live in the
+  `RAYTRACING_ACCELERATION_STRUCTURE` state for their whole life.
+- Staging buffers for uploads are kept alive until the setup command list has executed and the
+  queue has been drained.
+- COM objects use `Microsoft::WRL::ComPtr`. Destruction order in `Application::RunRender`:
+  Renderer and SwapChain (both wait for the GPU) before GraphicsQueue, then Device. The
+  info-queue callback is unregistered in `Device::~Device`.
+
+## Coordinates and data contracts
+
+See `docs/RENDERING.md`. In short: metres, right-handed, +Y up, camera looks along local -Z,
+column vectors, row-major storage on both CPU and GPU, one shared layout header
+(`shaders/shared/layouts.hlsli` mirrored by `src/render/gpu_layouts.h`, checked by static_asserts
+and by the GPU layout probe).
+
+## Error policy
+
+Initialization failures throw `lc::Error` (or `lc::UnsupportedHardware`, `lc::UsageError`) with
+the failing call, HRESULT text, and file:line. The application maps them to exit codes 1, 3, and
+2. Per-frame paths log and return; `Present` failure triggers `Device::ReportDeviceRemoved`
+(removal reason plus DRED breadcrumbs and page-fault data). Debug-layer messages arrive through
+`ID3D12InfoQueue1::RegisterMessageCallback`, are logged, and are counted; `--validate` fails on
+any error-severity message.
+
+The application's test paths add a per-frame readback (frame sequences, trail-lag statistics) and
+the benchmark loop (replay restarts with a world reset that counts as a camera cut).
+
+Scene reload (spec §16): the file is parsed and validated first; every problem is logged and the
+running scene stays untouched on failure. A valid document replaces the world at the frame
+boundary after a full GPU wait (new `World`, scene upload, history reset, simulation restart).
+Assets are read from `<executable dir>/assets` only; relative scene paths are resolved against
+that root and refused when they leave it.
+
+## Not yet present
+
+DLSS reconstruction (deferred evaluation), the glTF/GLB subset (deferred), a navigation mesh (the
+machine routes along its patrol polyline, D-049), packaging (M7). `docs/STATUS.md` names the next
+task.
