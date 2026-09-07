@@ -58,6 +58,20 @@ add_test(NAME gpu_scene_reload_test COMMAND LastCircuit --scene two_room --repla
 add_test(NAME gpu_scene_file_option COMMAND LastCircuit --scene-file scenes/two_room.json --mode reference --spp 8 --validate --headless)
 # M5: T13 part 1: the placeholder body appears in the mirror while it is below the direct view.
 add_test(NAME gpu_t13_player_in_reflection COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t13_reflection.json" --stop-at-tick 760 --mode reference --spp 64 --validate --headless)
+# M5: T14 (game rules do not depend on rendering) and T15 (the route completes, fails, and restarts).
+# The world-state hash of each replay comes from the CPU-only run (`--simulate-only`; regenerate the
+# constants below with that command whenever the rules change on purpose); every rendered run, in any
+# mode, exposure, or internal size, must reproduce it, and the world-state checks run in all of them.
+set(LC_T15_ROUTE_HASH 8916cf7a6bd38090)
+set(LC_T15_CATCH_HASH b838d2921818a84f)
+add_test(NAME sim_t15_route_cpu_only COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_route.json" --simulate-only --validate --expect-state-hash ${LC_T15_ROUTE_HASH})
+add_test(NAME sim_t15_catch_restart_cpu_only COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_catch_restart.json" --simulate-only --validate --expect-state-hash ${LC_T15_CATCH_HASH})
+add_test(NAME gpu_t14_rules_raw COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_route.json" --mode raw --frames 1481 --validate --headless --expect-state-hash ${LC_T15_ROUTE_HASH})
+add_test(NAME gpu_t14_rules_denoised COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_route.json" --mode denoised --frames 1481 --validate --headless --expect-state-hash ${LC_T15_ROUTE_HASH})
+add_test(NAME gpu_t14_rules_exposure COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_route.json" --mode denoised --exposure 0.25 --frames 1481 --validate --headless --expect-state-hash ${LC_T15_ROUTE_HASH})
+add_test(NAME gpu_t14_rules_internal_size COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_route.json" --mode denoised --internal 960x540 --frames 1481 --validate --headless --expect-state-hash ${LC_T15_ROUTE_HASH})
+add_test(NAME gpu_t15_catch_restart_denoised COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_catch_restart.json" --mode denoised --frames 1691 --validate --headless --expect-state-hash ${LC_T15_CATCH_HASH})
+set_tests_properties(sim_t15_route_cpu_only sim_t15_catch_restart_cpu_only PROPERTIES LABELS cpu)
 # Benchmark command (spec §21): a short headless run must produce a complete report.
 add_test(NAME gpu_benchmark_smoke COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_mirror_motion.json" --mode denoised
          --benchmark-seconds 2 --warmup-seconds 0.5 --report "${CMAKE_BINARY_DIR}/artifacts/benchmark_smoke.json" --headless)
@@ -87,6 +101,7 @@ set(_lc_gpu_tests
     gpu_denoised_split_lossless gpu_denoised_box_static gpu_denoised_mirror_box gpu_denoised_metals_room gpu_denoised_blackout_reset
     gpu_denoised_motion_lamp gpu_denoised_motion_mirror_threat gpu_denoised_trail_lag gpu_denoised_resize_test gpu_denoised_scaled_resize_test
     gpu_benchmark_smoke gpu_scene_reload_test gpu_scene_file_option gpu_t13_player_in_reflection
+    gpu_t14_rules_raw gpu_t14_rules_denoised gpu_t14_rules_exposure gpu_t14_rules_internal_size gpu_t15_catch_restart_denoised
     gpu_t08_box_strategies_agree gpu_t07_agrees_with_higher_sample_reference gpu_t08_box_depth_truncation_report)
 set_tests_properties(${_lc_gpu_tests} PROPERTIES SKIP_RETURN_CODE 3 LABELS gpu TIMEOUT 900)
 set_tests_properties(gpu_resize_test gpu_denoised_resize_test gpu_denoised_scaled_resize_test PROPERTIES LABELS "gpu;window" RUN_SERIAL TRUE)

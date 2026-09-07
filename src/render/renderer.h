@@ -154,6 +154,11 @@ public:
 
     // After a full GPU wait, reads the timings of the most recently submitted frame.
     void CollectFinalTimings();
+    // Debug evidence for the presented image: copies the back buffer (after the present copy and the
+    // interface pass) into a readback buffer inside the open frame; TakeBackBufferReadback returns the
+    // RGBA8 pixels after the frame completed (the caller waits for the queue).
+    void RecordBackBufferReadback(ID3D12Resource* backBuffer, std::uint32_t width, std::uint32_t height);
+    std::vector<std::uint8_t> TakeBackBufferReadback(std::uint32_t& width, std::uint32_t& height);
 
     const std::vector<gfx::TimerResult>& LastTimings() const { return lastTimings_; }
     // Frames in which the TLAS was rebuilt (first frame plus every frame with a transform change).
@@ -234,6 +239,11 @@ private:
     gfx::GpuBuffer probeBuffer_;
     gfx::GpuBuffer statsBuffer_;
     gfx::GpuBuffer statsZero_;
+    gfx::GpuBuffer backBufferReadback_;
+    gfx::ReadbackPlan backBufferPlan_{};
+    std::uint32_t backBufferReadbackWidth_ = 0;
+    std::uint32_t backBufferReadbackHeight_ = 0;
+    bool backBufferReadbackPending_ = false;
 
     gfx::ComPtr<ID3D12RootSignature> rootSignature_;
     std::unique_ptr<gfx::ComputePipeline> cameraView_;

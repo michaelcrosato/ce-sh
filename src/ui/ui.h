@@ -64,6 +64,7 @@ struct Overlay {
     float cueSeconds = 0.0f;
     std::string objectiveLine;  // Current objective at the top left.
     bool introCard = false;     // Controls card during the introduction.
+    bool endCard = false;       // The route is complete.
 };
 
 class Ui {

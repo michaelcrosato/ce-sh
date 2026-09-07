@@ -12,15 +12,18 @@ Milestone:            M0 PASSED, M1 PASSED, M2 PASSED, M3 PASSED,
                       schema 1) with complete validation, limits, and asset-root containment; reload at a frame
                       boundary that never replaces a working scene with a broken one; content hashes in captures and
                       reports; the diagnostic panel is deferred to M5 (KI-017).
-                      M5 in progress (Tasks 1-4 of 6 PASSED): collision (capsule against the kit boxes, lamp
+                      M5 in progress (Tasks 1-5 of 6 PASSED): collision (capsule against the kit boxes, lamp
                       sweep, a door that never traps the player), the placeholder body visible in the mirror and
                       clear of the camera by placement, the interface (prompts, objective line, controls card,
-                      pause menu with settings, F1 diagnostic panel, reload from the menu), and sound (generated
+                      pause menu with settings, F1 diagnostic panel, reload from the menu), sound (generated
                       clips with provenance, attenuation, pan, occlusion, state-following hums and events, text
-                      cues, volumes) are built, tested, and checked; threat states, the objective with catch and
-                      checkpoint restart, and the records with the human play-through follow the M5 plan.
+                      cues, volumes), and the game rules (the machine's patrol/chase/investigate/wait/return on
+                      gameplay data, the objective phases with checkpoints, the catch that restarts from the
+                      checkpoint, the menu restart, T14 rule invariance through a CPU-only state hash, T15
+                      route and catch replays) are built, tested, and checked; the records and the human
+                      play-through (Task 6) remain.
 Build or commit:      branch m0-m1-bootstrap; see git log for the exact commit.
-                      Presets windows-debug and windows-release both configured, built, and tested (47 tests each).
+                      Presets windows-debug and windows-release both configured, built, and tested (54 tests each).
 Environment:          Windows 11 Home 10.0.26200.9278 (25H2); Intel Core i7-14700F, 31.8 GiB RAM;
                       Visual Studio Community 2026 18.9.12120.119, MSVC 14.51.36231 (cl 19.51.36256);
                       CMake 4.3.1-msvc1 (VS-bundled); Windows SDK 10.0.26100.0; DXC 1.8.2502.11 + dxil.dll;
@@ -63,15 +66,28 @@ Implemented in this session:
                       listener's right axis, occlusion 0.3 through the collision solids), AudioSystem (24 voices,
                       effects/ambience groups, master and pause), --no-audio; the diagnostic panel shows the device
                       and voices. Input record kept until a tick reads it (D-042, a dropped-press bug found here).
+                      Rules: Threat behaviours patrol/hunt (detection from the lamp state, distance, facing, and
+                      a line of sight through the collision solids; chase, investigate, wait, return; contact =
+                      catch), objective phases with checkpoints and the restart (menu and catch), the scene
+                      file's exit objective, world-state replay checks (objective_state, threat_state,
+                      caught_count, player_near) evaluated right after their tick, the per-tick world-state
+                      hash, --simulate-only (no graphics), --expect-state-hash, --threat, the t15 route and
+                      catch/restart replays, --capture-backbuffer (presented-image evidence).
 Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean (ImGui and miniaudio at /W3, no warnings); 6
                       shaders (cs_6_5, HLSL 2021, -WX -Zpr) plus NRD's 31 DXIL blobs through ShaderMake with the
                       same DXC.
-                      CPU TESTED: lc_cpu_tests 89/89 PASSED (both presets): + scene-file golden load, rejection
-                      of every rule, limits and containment (3 cases); collision (6 cases); sound rules (7 cases).
-                      GPU EXECUTED + PASSED (both presets), 46 GPU tests (ctest 47/47):
+                      CPU TESTED: lc_cpu_tests 96/96 PASSED (both presets): + scene-file golden load, rejection
+                      of every rule, limits and containment (3 cases); collision (6 cases); sound rules (7 cases);
+                      objective, hunt, detection, state hash, state checks, the t15 replays (7 cases).
+                      GPU EXECUTED + PASSED (both presets), 51 GPU tests + 2 CPU-only replay runs (ctest 54/54):
                         M5: t13 reflection (the mirror reports the torso after one bounce, the torso is not
                           directly visible, the reflected torso is lit); every M3/M4 replay now runs against the
-                          collision solids with unchanged expectations (Release t06 door-open patch 0.01963).
+                          collision solids with unchanged expectations (Release t06 door-open patch 0.01963);
+                          T14: the route replay in raw, denoised, exposure 0.25, and 960x540 internal-size runs
+                          reproduces the CPU-only state hash bit for bit with all world-state checks passing;
+                          T15: the route completes (escaped at tick 1461, never chased) and the catch replay
+                          (chase at tick 156, caught at 208, restart to the checkpoint, escaped at 1670) pass on
+                          the CPU alone and under the denoised renderer.
                         M3.5: scene reload test, --scene-file option.
                         M1-M3 as before (33), all still passing with the reworked renderer (raw and reference paths
                           unchanged; the layout probe now checks 35 fields including GuideConstants).
@@ -96,6 +112,11 @@ Image evidence:       IMAGE CHECKED (artifacts/m4 and artifacts/m5/ui, regenerat
                       48 kHz, 0 dropped) and the cue text under the objective; the log lists the cues at the
                       events (creak at the door's state change, the click at the lamp toggle). Listening by a
                       person: NOT RUN in this record.
+                      M5 rules: the catch replay in a window with the panel (chase, the panel after the restart
+                      with catches 1 / restarts 1 / history resets 2, the end card's phase); headless captures of
+                      the same ticks are clean in denoised and reference modes. Desktop screen captures of the
+                      window show transparent holes the presented back buffer does not contain (KI-028; proven
+                      with the in-app back-buffer readback: 0 pixels with alpha below 255 at frame 340).
                       t08_box denoised after 16 frames: smooth walls and soft contact shadows, no visible noise.
                       two_room tick 740 denoised (exposure 6): the dark inspection room with the mirror showing the
                       warm-lit hall and the threat silhouette, clean shading, no residual noise; the history overlay
@@ -135,10 +156,10 @@ Changed assumptions:  NRD's license is NVIDIA's proprietary RTX SDK license (att
                       recorded for the owner's review. The denoiser's spatial filter biases sharp lighting gradients
                       by a few percent (KI-018); the raw mean stays exact. Mirror planes are static for the PSR
                       motion (KI-020).
-Next concrete task:   M5 Task 5 of docs/superpowers/plans/2026-09-06-m5-playable-proof.md (threat states with
-                      gameplay-data detection, the objective state machine, catch and checkpoint restart, T14
-                      invariance through a CPU-only state hash, T15 replays), then Task 6 (records; the human
-                      play-through; performance re-measured with the M5 content).
+Next concrete task:   M5 Task 6 of docs/superpowers/plans/2026-09-06-m5-playable-proof.md: performance
+                      re-measured with the M5 content (body, sound on, interface off) against the §17
+                      criterion, the human play-through recorded honestly (PASSED only if a person played it),
+                      and the M5 gate decision; then M6 (the six-room layout, fuse route, circuit changes).
 ```
 
 ## Benchmark table (M4, two-room proof)

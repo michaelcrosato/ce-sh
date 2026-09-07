@@ -50,6 +50,7 @@ struct AppOptions {
     std::uint32_t frames = 0;     // 0 = run until the window closes (or the reference target is reached).
     float horizontalFovDegrees = 90.0f;
     std::optional<std::filesystem::path> capture;
+    std::int64_t captureBackBuffer = -1;                // Frame whose presented back buffer (interface included) is written beside the capture.
     std::optional<std::filesystem::path> stats;
     std::optional<std::filesystem::path> envReport;
     std::optional<std::filesystem::path> logFile;
@@ -61,6 +62,11 @@ struct AppOptions {
     std::optional<std::filesystem::path> replay;        // Drive the simulation from a replay file.
     std::int64_t stopAtTick = -1;                       // With --replay: run exactly this many ticks, then freeze.
     float mouseSensitivity = 0.0022f;                   // Radians per raw mouse count.
+    // Game rules (M5): the threat's behaviour in play ("hunt" by default; replays carry their own
+    // setting), the CPU-only replay run, and the expected world-state hash (T14 rule invariance).
+    std::string threat = "hunt";
+    bool simulateOnly = false;                          // --replay without any graphics: ticks, state checks, the state hash.
+    std::optional<std::uint64_t> expectStateHash;       // The run fails when the final state hash differs.
     // Denoised mode (M4).
     std::uint32_t historyFrames = 30;                   // NRD history bound in frames.
     float prepassRadius = 0.0f;                         // NRD diffuse pre-accumulation blur radius in pixels (0 = off).

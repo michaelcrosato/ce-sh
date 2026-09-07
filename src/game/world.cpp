@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 
 namespace lc::game {
 
@@ -100,6 +101,12 @@ void Door::Block() {
     state_ = DoorState::Opening;
 }
 
+void Door::Restore(DoorState state, float angle) {
+    state_ = state;
+    angle_ = angle;
+    previousAngle_ = angle;
+}
+
 void Door::Tick(float dt) {
     previousAngle_ = angle_;
     const float rate = kOpenAngle / kDuration;
@@ -135,6 +142,15 @@ void Lamp::Place(const SocketSpec& socket) {
 
 void Lamp::Toggle(Scene& scene) {
     on_ = !on_;
+    scene.SetEmitterOn(material_, on_);
+}
+
+void Lamp::Restore(const LampSnapshot& snapshot, Scene& scene) {
+    state_ = snapshot.state;
+    on_ = snapshot.on;
+    socketName_ = snapshot.socket;
+    current_ = snapshot.pose;
+    previous_ = snapshot.pose;
     scene.SetEmitterOn(material_, on_);
 }
 
@@ -214,8 +230,146 @@ PoseSpec Threat::PoseAtDistance(float distance) const {
     return p;
 }
 
+const char* ThreatStateName(ThreatState state) {
+    switch (state) {
+        case ThreatState::Patrol: return "patrol";
+        case ThreatState::Chase: return "chase";
+        case ThreatState::Investigate: return "investigate";
+        case ThreatState::Wait: return "wait";
+        case ThreatState::Return: return "return";
+    }
+    return "unknown";
+}
+
+const char* ThreatBehaviourName(ThreatBehaviour behaviour) {
+    return behaviour == ThreatBehaviour::Hunt ? "hunt" : "patrol";
+}
+
 void Threat::Tick(float dt) {
     previous_ = current_;
+    seen_ = false;
+    caught_ = false;
+    Advance(dt);
+}
+
+bool Threat::Detect(const ThreatSenses& senses) const {
+    Vec3 to = senses.playerFeet - current_.position;
+    to.y = 0.0f;
+    const float distance = math::Length(to);
+    const float range = senses.lampHeld && senses.lampOn ? kDetectRangeLit : kDetectRangeDark;
+    if (distance >= range || distance <= 1e-4f) return distance <= 1e-4f;
+    const float facing = math::Dot(to / distance, Forward());
+    return facing > kFacingCos && senses.lineOfSight;
+}
+
+float Threat::MoveToward(Vec3 target, float speed, float dt, const CollisionWorld* colliders) {
+    Vec3 to = target - current_.position;
+    to.y = 0.0f;
+    const float distance = math::Length(to);
+    if (distance <= 1e-5f) return 0.0f;
+    const Vec3 dir = to / distance;
+    const float step = std::min(distance, speed * dt);
+    const Vec3 before = current_.position;
+    if (colliders != nullptr) {
+        current_.position = colliders->MoveCapsule(current_.position, dir * step, kCapsule);
+    } else {
+        current_.position += dir * step;
+    }
+    current_.yaw = std::atan2(-dir.x, -dir.z);
+    const float progress = math::Length(current_.position - before);
+    stuckSeconds_ = progress < 0.25f * step ? stuckSeconds_ + dt : 0.0f;
+    return math::Length(target - current_.position);
+}
+
+float Threat::ClosestPathDistance() const {
+    float best = 0.0f;
+    float bestGap = 1e30f;
+    for (std::size_t i = 0; i + 1 < waypoints_.size(); ++i) {
+        const Vec3 a = waypoints_[i];
+        const Vec3 b = waypoints_[i + 1];
+        const Vec3 ab = b - a;
+        const float len2 = math::Dot(ab, ab);
+        const float t = len2 > 0.0f ? std::clamp(math::Dot(current_.position - a, ab) / len2, 0.0f, 1.0f) : 0.0f;
+        const Vec3 p = a + ab * t;
+        const float gap = math::Length(p - current_.position);
+        if (gap < bestGap) {
+            bestGap = gap;
+            best = cumulative_[i] + t * std::sqrt(len2);
+        }
+    }
+    return best;
+}
+
+void Threat::Enter(ThreatState state) {
+    state_ = state;
+    stateSeconds_ = 0.0f;
+    stuckSeconds_ = 0.0f;
+    if (state == ThreatState::Return && !waypoints_.empty()) {
+        const float d = ClosestPathDistance();
+        returnTarget_ = PoseAtDistance(d).position;
+        returnWaypoint_ = 0;
+    }
+}
+
+void Threat::Tick(float dt, const ThreatSenses& senses, const CollisionWorld* colliders) {
+    if (behaviour_ == ThreatBehaviour::Patrol) {
+        Tick(dt);
+        return;
+    }
+    previous_ = current_;
+    caught_ = false;
+    stateSeconds_ += dt;
+    seen_ = Detect(senses);
+    Vec3 toPlayer = senses.playerFeet - current_.position;
+    toPlayer.y = 0.0f;
+    const float playerDistance = math::Length(toPlayer);
+
+    if (seen_ && state_ != ThreatState::Chase) {
+        Enter(ThreatState::Chase);
+    }
+    switch (state_) {
+        case ThreatState::Patrol:
+            Advance(dt);
+            break;
+        case ThreatState::Chase:
+            if (seen_) {
+                lastSeen_ = senses.playerFeet;
+                MoveToward(lastSeen_, kChaseSpeed, dt, colliders);
+            } else {
+                Enter(ThreatState::Investigate);
+            }
+            break;
+        case ThreatState::Investigate: {
+            const float left = MoveToward(lastSeen_, kInvestigateSpeed, dt, colliders);
+            if (left < kArriveDistance || stateSeconds_ > kInvestigateTimeout || stuckSeconds_ > kStuckSeconds) Enter(ThreatState::Wait);
+            break;
+        }
+        case ThreatState::Wait:
+            if (stateSeconds_ >= kWaitSeconds) Enter(ThreatState::Return);
+            break;
+        case ThreatState::Return: {
+            const float left = MoveToward(returnTarget_, kInvestigateSpeed, dt, colliders);
+            if (left < kArriveDistance) {
+                distance_ = ClosestPathDistance();
+                current_ = PoseAtDistance(distance_);
+                state_ = ThreatState::Patrol;
+                stateSeconds_ = 0.0f;
+            } else if (stuckSeconds_ > kStuckSeconds && !waypoints_.empty()) {
+                // Blocked on the straight line: aim at the waypoints in turn instead.
+                returnTarget_ = waypoints_[returnWaypoint_ % waypoints_.size()];
+                ++returnWaypoint_;
+                stuckSeconds_ = 0.0f;
+            }
+            break;
+        }
+    }
+    // Contact in any state is a catch (the machine's body against the player's capsule).
+    if (playerDistance < kCatchDistance) {
+        caught_ = true;
+    }
+}
+
+void Threat::Advance(float dt) {
     if (pathLength_ <= 0.0f) {
         return;
     }
@@ -249,6 +403,33 @@ void Threat::SetDistance(float distance) {
     distance_ = std::clamp(distance, 0.0f, pathLength_);
     current_ = PoseAtDistance(distance_);
     previous_ = current_;
+    state_ = ThreatState::Patrol;
+    stateSeconds_ = 0.0f;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Objective
+
+const char* ObjectivePhaseName(ObjectivePhase phase) {
+    switch (phase) {
+        case ObjectivePhase::Introduction: return "introduction";
+        case ObjectivePhase::LampAcquired: return "lamp_acquired";
+        case ObjectivePhase::LampPlaced: return "lamp_placed";
+        case ObjectivePhase::LampRetrieved: return "lamp_retrieved";
+        case ObjectivePhase::Escaped: return "escaped";
+    }
+    return "unknown";
+}
+
+const char* ObjectiveText(ObjectivePhase phase) {
+    switch (phase) {
+        case ObjectivePhase::Introduction: return "Find the lamp and pick it up";
+        case ObjectivePhase::LampAcquired: return "Carry the lamp to the shelf in the inspection room";
+        case ObjectivePhase::LampPlaced: return "Check the mirror, then take the lamp back";
+        case ObjectivePhase::LampRetrieved: return "Return to the exit in the equipment room with the lamp";
+        case ObjectivePhase::Escaped: return "You made it out";
+    }
+    return "";
 }
 
 PoseSpec Threat::At(float alpha) const {
@@ -262,13 +443,15 @@ PoseSpec Threat::At(float alpha) const {
 // ---------------------------------------------------------------------------------------------
 // World
 
-World::World(TwoRoomLevel level)
-    : level_(std::move(level)), door_(level_.door), lamp_(level_, level_.floorSocket), threat_(level_.threatPath, level_.threatSpeed) {
+World::World(TwoRoomLevel level, ThreatBehaviour behaviour)
+    : level_(std::move(level)), door_(level_.door), lamp_(level_, level_.floorSocket), threat_(level_.threatPath, level_.threatSpeed), behaviour_(behaviour) {
     colliders_.Build(GetScene(), level_.colliders);
     colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, 0.0f));
     player_.Reset({level_.playerStart.position, level_.playerStart.yaw, level_.playerStart.pitch});
+    threat_.SetBehaviour(behaviour_);
     lastLampPose_ = lamp_.Current();
     lastThreatPose_ = threat_.Current();
+    SaveCheckpoint();
     // The static level parks the threat at the check position; the simulation starts on the path.
     WriteRenderScene(GetScene(), 0.0f);
     GetScene().CommitRenderedFrame();
@@ -280,7 +463,16 @@ void World::Reset() {
     lamp_ = Lamp(level_, level_.floorSocket);
     GetScene().SetEmitterOn(level_.lampMaterial, true);  // The fixture starts switched on.
     threat_ = Threat(level_.threatPath, level_.threatSpeed);
+    threat_.SetBehaviour(behaviour_);
     colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, 0.0f));
+    phase_ = ObjectivePhase::Introduction;
+    SaveCheckpoint();
+    catches_ = 0;
+    restarts_ = 0;
+    justRestarted_ = false;
+    justAdvanced_ = false;
+    stateHash_ = 14695981039346656037ull;
+    events_.clear();
     ticks_ = 0;
     doorBlocks_ = 0;
     wroteOnce_ = false;
@@ -288,6 +480,113 @@ void World::Reset() {
     lastLampPose_ = lamp_.Current();
     lastThreatPose_ = threat_.Current();
     WriteRenderScene(GetScene(), 0.0f);
+}
+
+void World::SaveCheckpoint() {
+    checkpoint_.phase = phase_;
+    checkpoint_.player = player_.Current();
+    checkpoint_.door = door_.State();
+    checkpoint_.doorAngle = door_.Angle();
+    checkpoint_.lamp = lamp_.Snapshot();
+}
+
+void World::RestartFromCheckpoint() {
+    phase_ = checkpoint_.phase;
+    player_.Reset(checkpoint_.player);
+    door_.Restore(checkpoint_.door, checkpoint_.doorAngle);
+    colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, door_.Angle()));
+    lamp_.Restore(checkpoint_.lamp, GetScene());
+    // The machine goes back to its round; nothing is ever staged into the player's view.
+    threat_ = Threat(level_.threatPath, level_.threatSpeed);
+    threat_.SetBehaviour(behaviour_);
+    ++restarts_;
+    justRestarted_ = true;
+    Event(std::format("tick {}: restart {} from the checkpoint '{}' (player at {:.2f}, {:.2f}, {:.2f})", ticks_, restarts_, ObjectivePhaseName(phase_),
+                      checkpoint_.player.position.x, checkpoint_.player.position.y, checkpoint_.player.position.z));
+    WriteRenderScene(GetScene(), 1.0f);
+}
+
+ThreatSenses World::Sense() const {
+    ThreatSenses s;
+    const PlayerPose& pose = player_.Current();
+    s.playerFeet = pose.position;
+    s.lampHeld = lamp_.State() == LampState::Held;
+    s.lampOn = lamp_.IsOn();
+    const Vec3 head = threat_.Current().position + Vec3{0.0f, 1.35f, 0.0f};
+    s.lineOfSight = colliders_.SegmentClear(head, player_.EyePosition(pose));
+    return s;
+}
+
+void World::UpdateObjective() {
+    const ObjectivePhase before = phase_;
+    const bool held = lamp_.State() == LampState::Held;
+    switch (phase_) {
+        case ObjectivePhase::Introduction:
+            if (held) phase_ = ObjectivePhase::LampAcquired;
+            break;
+        case ObjectivePhase::LampAcquired:
+            if (!held && lamp_.SocketName() == level_.shelfSocket.name) phase_ = ObjectivePhase::LampPlaced;
+            break;
+        case ObjectivePhase::LampPlaced:
+            if (held) phase_ = ObjectivePhase::LampRetrieved;
+            break;
+        case ObjectivePhase::LampRetrieved:
+            if (held && level_.hasExit) {
+                Vec3 to = player_.Current().position - level_.exitPosition;
+                to.y = 0.0f;
+                if (math::Length(to) <= level_.exitRadius) phase_ = ObjectivePhase::Escaped;
+            }
+            break;
+        case ObjectivePhase::Escaped:
+            break;
+    }
+    if (phase_ != before) {
+        justAdvanced_ = true;
+        SaveCheckpoint();
+        Event(std::format("tick {}: objective {} -> {}", ticks_, ObjectivePhaseName(before), ObjectivePhaseName(phase_)));
+    }
+}
+
+void World::HashTick() {
+    auto mix = [&](const void* data, std::size_t size) {
+        const auto* bytes = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < size; ++i) {
+            stateHash_ ^= bytes[i];
+            stateHash_ *= 1099511628211ull;
+        }
+    };
+    auto mixFloat = [&](float f) { mix(&f, sizeof(f)); };
+    const std::uint8_t phase = static_cast<std::uint8_t>(phase_);
+    const std::uint8_t threatState = static_cast<std::uint8_t>(threat_.State());
+    const std::uint8_t door = static_cast<std::uint8_t>(door_.State());
+    const std::uint8_t lamp = static_cast<std::uint8_t>((lamp_.State() == LampState::Held ? 1 : 0) | (lamp_.IsOn() ? 2 : 0));
+    mix(&ticks_, sizeof(ticks_));
+    mix(&phase, 1);
+    mix(&threatState, 1);
+    mix(&door, 1);
+    mix(&lamp, 1);
+    mixFloat(door_.Angle());
+    const PlayerPose& p = player_.Current();
+    mixFloat(p.position.x);
+    mixFloat(p.position.y);
+    mixFloat(p.position.z);
+    mixFloat(p.yaw);
+    mixFloat(p.pitch);
+    const PoseSpec t = threat_.Current();
+    mixFloat(t.position.x);
+    mixFloat(t.position.z);
+    mixFloat(t.yaw);
+    mix(&catches_, sizeof(catches_));
+}
+
+void World::Event(std::string text) {
+    events_.push_back(std::move(text));  // The application logs them (Info) after the ticks.
+}
+
+std::vector<std::string> World::TakeEvents() {
+    std::vector<std::string> out;
+    out.swap(events_);
+    return out;
 }
 
 std::optional<InteractionTarget> World::CurrentInteraction() const {
@@ -329,6 +628,8 @@ std::optional<InteractionTarget> World::CurrentInteraction() const {
 }
 
 void World::Tick(const InputFrame& input, float dt) {
+    justRestarted_ = false;
+    justAdvanced_ = false;
     if (input.interactPressed) {
         if (const auto target = CurrentInteraction()) {
             if (target->name == "door") {
@@ -360,9 +661,22 @@ void World::Tick(const InputFrame& input, float dt) {
         ++doorBlocks_;
         log::Debug("tick {}: door blocked by the player, reopening", ticks_);
     }
-    threat_.Tick(dt);
+    const ThreatState threatBefore = threat_.State();
+    threat_.Tick(dt, Sense(), &colliders_);
+    if (threat_.State() != threatBefore) {
+        Event(std::format("tick {}: threat {} -> {}", ticks_, ThreatStateName(threatBefore), ThreatStateName(threat_.State())));
+    }
     lamp_.Tick(player_, &colliders_);
+    UpdateObjective();
+    if (threat_.CaughtPlayer() && phase_ != ObjectivePhase::Escaped) {
+        ++catches_;
+        Event(std::format("tick {}: caught ({}) at ({:.2f}, {:.2f}, {:.2f})", ticks_, catches_, player_.Current().position.x, player_.Current().position.y,
+                          player_.Current().position.z));
+        RestartFromCheckpoint();
+        lamp_.Tick(player_, &colliders_);
+    }
     ++ticks_;
+    HashTick();
 }
 
 bool World::WriteRenderScene(Scene& scene, float alpha) {

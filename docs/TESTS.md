@@ -18,7 +18,7 @@ a supported GPU therefore reports the GPU tests as NOT RUN.
 Tolerances were chosen before the tests were run and are recorded here; they must not be widened
 to pass. When a scene was redesigned (T07, see below) the tolerance stayed and the scene changed.
 
-## CPU tests (`cpu_tests`, 89 cases in `tests/cpu`)
+## CPU tests (`cpu_tests`, 96 cases in `tests/cpu`)
 
 | File | Checks |
 |---|---|
@@ -42,6 +42,7 @@ to pass. When a scene was redesigned (T07, see below) the tolerance stayed and t
 | `test_benchmark.cpp` | Nearest-rank percentiles, median, counts above 33.3 / 50 ms; the report parses back as JSON with every required section |
 | `test_scene_file.cpp` | The golden `two_room.json` reproduces the proof level (material and instance counts, circuit states, door hinge, sockets, path, markers, the derived mirror aim within 1e-5, collider flags, deterministic reload hash); every validation rule rejects a patched document with a message naming the list, identifier, or field (schema, JSON syntax, duplicate id, unknown material, reflectance range, unknown circuit, box without centre, negative extent, opening leaving no wall, non-axis facing, unknown marker, objectives not implemented, zero speed); limits (object count, file size); asset-root containment (parent traversal and absolute paths refused, missing file reported) |
 | `test_collision.cpp` | Oriented boxes from the level's kit parts (the door leaf follows its angle); the capsule is pushed out of a wall it enters and slides along it; a centre on a face never crosses to the far side; the sphere sweep stops the carried lamp at a wall; a closing door that meets the player swings back open (`DoorBlocks` counts it); segment tests see through an open doorway and not through the closed leaf; the player cannot walk through the closed door or the walls in the replays (`t05`, `t06`) |
+| `test_objective.cpp` | The objective advances only on its events (lamp taken, placed on the shelf socket and not the floor one, taken back; the exit counts only with the lamp retrieved) and saves a checkpoint at each phase; in hunt mode the machine ignores the lit lamp behind the closed door, chases it in the open doorway, catches, and the restart restores the checkpoint pose, phase, door, and lamp with the machine back at its path start; detection needs range (2.5 m dark, 8 m lit), facing, and a clear line; the state hash is equal for equal inputs and differs for one different input or one extra tick; the state-check log evaluates checks after their tick and reports pending ones; the committed `t15_route` and `t15_catch_restart` replays pass every check on the CPU, deterministically, and hash differently |
 | `test_audio.cpp` | Inverse-square attenuation clamped inside the reference distance and silent past the maximum; pan +1/-1/0 and the diagonal from the listener's right axis, turning the listener turns the pan; the occlusion factor scales the level and keeps the pan; every generated clip is non-empty, finite, under three seconds, peaks between 0.05 and 1, carries a `generated:` provenance, and is deterministic (the hum loop's ends meet, the room tone is exactly 2 s, the footstep variants differ); the director starts hums for lit fixtures only, stops one when its circuit goes off and starts one that comes on, moves the lamp's hum with its transform; door creak and thud on the state edges with the "creaks"/"shuts" cues, lamp click and handling, three footsteps over 2 m alternating variants and never occludable; the machine's loop runs only while it moves (a tick-less frame keeps it, a stop longer than the hold ends it), its cue respects the 6 m / 3 m occluded rule and the 5 s period; chime and sting; the system without a device keeps the cues and drops nothing |
 
 ## GPU tests (`tests/gpu/CMakeLists.txt`)
@@ -152,11 +153,17 @@ Cross-run comparisons via `tests/scripts/compare_runs.ps1` (patch means per chan
 | `gpu_t07_agrees_with_higher_sample_reference` | `t07_bleed`: `mis` 2048 spp vs 256 spp | Within 2 % or 3 SE (spec T07: agreement with a higher-sample reference) |
 | `gpu_t08_box_depth_truncation_report` | `t08_box`: 12 hits vs 4 hits, 512 spp | Informational (never fails): reports the truncation bias of the 4-hit production budget |
 
-### M5: the playable proof (spec §14, §19 T13)
+### M5: the playable proof (spec §14, §15, §19 T13–T15)
 
 | Test | Command (abridged) | Checks |
 |---|---|---|
 | `gpu_t13_player_in_reflection` | `--replay t13_reflection.json --stop-at-tick 760 --mode reference --spp 64 --validate` | At the mirror-check pose the mirror pixel aimed at (6.4, 1.35, 12.0) reports `player_torso` after one mirror bounce (the player is not omitted from reflections); the torso is not directly visible at level pitch; the reflected torso patch is lit (minimum 5e-6, measured 2e-5 with the lamp on the floor socket and the hall spill) |
+| `sim_t15_route_cpu_only` | `--replay t15_route.json --simulate-only --validate --expect-state-hash <route hash>` | No graphics at all: 1481 ticks of the careful route (lamp taken, switched off, the machine's round waited out behind the wall, the hall crossed behind it at a sprint, the lamp placed on the shelf and switched on, taken back and switched off, the crossing back, the exit reached with the lamp) with the world-state checks: `lamp_acquired` at tick 11, `patrol` at 300 and 1000 (never seen), `lamp_placed` 715, `lamp_retrieved` 731, `escaped` at 1480, `caught_count` 0, the player within 0.5 m of the exit; the final state hash equals the recorded constant |
+| `sim_t15_catch_restart_cpu_only` | `--replay t15_catch_restart.json --simulate-only --validate --expect-state-hash <catch hash>` | The lit lamp carried into the open doorway is seen from the hall (`chase` at tick 157), the walk continues into the machine (`caught_count` 1 at tick 209), the restart puts the player at the checkpoint pose within 0.05 m with the phase kept (`lamp_acquired`) and the machine back on its round (`patrol`); the careful route then completes (`lamp_placed` at 924, `escaped` at 1690, still one catch) |
+| `gpu_t14_rules_raw` / `_denoised` / `_exposure` / `_internal_size` | `--replay t15_route.json --frames 1481 --validate --headless --expect-state-hash <route hash>` with `--mode raw`, `--mode denoised`, `--mode denoised --exposure 0.25`, `--mode denoised --internal 960x540` | T14: the same replay rendered four different ways runs the same world-state checks and reproduces the CPU-only hash bit for bit (the hash covers every tick's objective phase, threat state and pose, player pose, lamp, door, catches) |
+| `gpu_t15_catch_restart_denoised` | `--replay t15_catch_restart.json --mode denoised --frames 1691 --validate --headless --expect-state-hash <catch hash>` | T15 under the production renderer: the catch, the checkpoint restart (a history reset), and the completion, with the CPU-only hash |
+
+The hash constants live in `tests/gpu/CMakeLists.txt` (`LC_T15_ROUTE_HASH`, `LC_T15_CATCH_HASH`); a deliberate rule change regenerates them with the `--simulate-only` command, and the CPU tests check the replays' outcomes and determinism without the constant. World-state check kinds: `objective_state`, `threat_state`, `caught_count`, `player_near` (docs in `src/game/replay.h`); they run right after their tick in every mode, including runs frozen with `--stop-at-tick`.
 
 The collision part of T13 (neither the body nor the lamp passes through an opaque wall) runs on
 the CPU (`test_collision.cpp`), and every replay now moves the player against the same solids: a
@@ -220,10 +227,16 @@ Approved image baselines are not yet stored; radiance is currently checked numer
   is the fixture transform (spec §14, T13's sound part): `AudioSnapshotOf` reads the lamp pose
   the renderer also uses. Hearing the output is NOT RUN by a person in this record.
 
+- Catch and restart (M5, `artifacts/m5/ui/10_*`–`12_*`): the catch replay in a window with the
+  panel: the chase in the hall, the panel after the restart (catches 1, restarts 1, history resets
+  2, the phase kept), and the end card's phase "escaped" with one catch. Screen captures of this
+  window carry transparent holes that the presented back buffer does not have (KI-028, checked
+  with `--capture-backbuffer 340`: 0 pixels with alpha below 255).
+
 ## Not yet implemented
 
 T11 systematic offset sweeps (partly covered by the T03/T04 seals and the 400 m furnace floor),
-T14–T18 (T16's fixed 180-second full-encounter replay needs the M5/M6 content; the benchmark
+T16–T18 (T16's fixed 180-second full-encounter replay needs the M6 content; the benchmark
 command exists). The §4 fourth sequence step (the
 threat's shadow moving across a wall before direct contact) is staged in M5. T12 human
 confirmation at normal playback speed is recorded in STATUS.md as NOT RUN with a person; the

@@ -56,6 +56,10 @@ struct TwoRoomLevel {
     InstanceId playerTorso;
     InstanceId playerHandLeft;
     InstanceId playerHandRight;
+    // Objective exit (spec §15): reached with the lamp held to finish the proof's route.
+    bool hasExit = false;
+    math::Vec3 exitPosition;
+    float exitRadius = 0.8f;
     PoseSpec mirrorCheckCamera;     // Room B, facing the mirror.
     math::Vec3 mirrorCheckPoint;    // Point on the mirror face whose reflection reaches the threat.
     math::Vec3 hallCheckPoint;      // Hall floor point seen through the mirror when the threat is absent.

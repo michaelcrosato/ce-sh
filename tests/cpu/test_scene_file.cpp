@@ -136,7 +136,11 @@ LC_TEST(scene_file_rejects_every_class_of_problem_with_a_named_message) {
     expectError(Patch(golden, "\"centre\": 1.2, \"width\": 0.9", "\"centre\": 0.3, \"width\": 0.9"), "leaves no wall");
     expectError(Patch(golden, "\"facing\": [0.0, -1.0, 0.0], \"material\": \"fixture_a\"", "\"facing\": [0.0, -0.5, 0.5], \"material\": \"fixture_a\""), "axis directions");
     expectError(Patch(golden, "\"start\": \"player_start\"", "\"start\": \"nowhere\""), "marker 'nowhere' does not exist");
-    expectError(Patch(golden, "\"objectives\": []", "\"objectives\": [{\"id\": \"x\"}]"), "not implemented");
+    expectError(Patch(golden, "\"kind\": \"exit\", \"marker\": \"exit\"", "\"kind\": \"portal\", \"marker\": \"exit\""), "unknown kind 'portal'");
+    expectError(Patch(golden, "\"kind\": \"exit\", \"marker\": \"exit\"", "\"kind\": \"exit\", \"marker\": \"nowhere\""), "marker 'nowhere' does not exist");
+    expectError(Patch(golden, "{\"id\": \"escape\", \"kind\": \"exit\", \"marker\": \"exit\", \"radius\": 0.8}",
+                      "{\"id\": \"escape\", \"kind\": \"exit\", \"marker\": \"exit\", \"radius\": 0.8}, {\"id\": \"again\", \"kind\": \"exit\", \"marker\": \"exit\"}"),
+                "only one exit");
     expectError(Patch(golden, "\"speed\": 1.2", "\"speed\": 0"), "'speed'");
     expectError(Patch(golden, "\"id\": \"floor\"", "\"id\": \"Floor\""), "lowercase");
 }

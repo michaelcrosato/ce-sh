@@ -142,6 +142,35 @@ Spec §15 lists fan rotation among the first sounds; the two-room proof has no f
 (`FanLoop`) is generated and tested but unused until M6 places one. The hands stay at rest while
 the lamp is carried (KI-023).
 
+## KI-026 — low — play mode — the machine moves in straight lines off its path
+
+Chase, investigate, and return steps head straight for their target and slide along the collision
+solids (D-043). A target around a corner can leave the machine pushing against a wall until its
+stuck timer (1.5 s) ends the move or cycles the return target through the waypoints. The proof's
+hall has one corner and the round is a straight segment, so this stays cosmetic; the six-room demo
+(M6) needs waypoint routing.
+
+## KI-027 — info — play mode — the start is inside the machine's dark range
+
+The machine starts its round 2.4 m from the player's start through Room A's wall, so the first
+"nearby" cue fires at once (KI-024) and the catch replay shows how quickly a lit lamp in the
+doorway is seen (chase at tick 156). The careful route waits behind the wall and crosses the hall
+behind the machine at a sprint; the level's timing is tight (about 0.6 m of margin at the
+crossing) and a redesign of the round belongs to the M6 layout work.
+
+## KI-028 — info — windowed runs — desktop screen captures show transparent holes the app never draws
+
+Screen captures of the window taken with GDI (`BitBlt` from the screen, or `PrintWindow` with
+`PW_RENDERFULLCONTENT`) contain clusters of pixels with RGBA (0, 0, 0, 0) in denoised mode: on the
+machine's dark body, and under the diagnostic panel when it is open (thousands of pixels in a
+diagonal streak that fades over time). Image viewers show them as white speckles. The application's
+own readback of the presented back buffer at the same moment (`--capture-backbuffer <frame>`, added
+for this check) has zero pixels with alpha below 255 and the display texture is clean, so the holes
+come from the desktop composition of the flip-model swap chain (`DXGI_ALPHA_MODE_IGNORE`) as seen
+by GDI capture, not from the renderer or the interface. Evidence: `artifacts/m5/ui/speckles`
+(`h_backbuffer/backbuffer_frame340.png` and `_alpha.png` fully opaque next to `h_printwindow.png`
+with holes). Use the in-app captures for image evidence; screenshots are for layout only.
+
 ## KI-012 — info — all builds — raw mode is noisy by design
 
 One path sample per pixel per frame with no temporal filtering (spec §13 raw mode). Real-time

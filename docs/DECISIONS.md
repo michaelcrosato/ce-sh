@@ -218,6 +218,21 @@ Format: date, issue, evidence, decision, consequence, rollback.
 - Decision: raw mouse deltas and key press edges stay in the window's record until a simulation tick consumed them; frame-level commands (F1, R) consume their own edges. Before this the record was cleared every frame, and at 144 frames per second more than half the frames run no 60 Hz tick, so key presses and mouse motion in those frames were lost (found when a posted F press did nothing in the sound check).
 - Consequence: presses are never dropped at any refresh rate; the paused or unfocused game still clears the record each frame, so no burst of motion follows a resume.
 
+## D-043 (2026-09-07) The machine's state machine runs on gameplay data; the visual tests keep the path
+
+- Decision: `Threat` has two behaviours. `patrol` is the deterministic ping-pong path the M3/M4 replays and their tolerances were built on (spec §15: "the first visual test uses a deterministic path"). `hunt` adds chase, investigate, wait, and return: detection is `distance < range` (8 m when the player carries the lit lamp, 2.5 m otherwise), the player inside a 60-degree cone of the machine's facing, and `CollisionWorld::SegmentClear` from the machine's head to the player's eye (walls and the closed door block it; nothing reads an image). Chase moves straight at the player at 1.8 m/s sliding along solids; losing sight goes to investigate (the last seen position, 1.4 m/s, 4 s timeout, a stuck timer), then wait (2 s), then return to the closest point of the path (waypoints in turn when the straight line is blocked). Contact within 0.6 m in any state is a catch. Replays carry `"threat": "hunt"`; play defaults to hunt with `--threat patrol` as the override.
+- Consequence: no navigation mesh (spec §15: "simple room and hall waypoints"); the straight-line moves can stall against corners (KI-026); the existing replays and their GPU tolerances are untouched; T14/T15 use hunt replays.
+
+## D-044 (2026-09-07) Objective phases, checkpoints, and the restart
+
+- Decision: the proof's objective is introduction → lamp acquired → lamp placed (the shelf socket only) → lamp retrieved → escaped (the `exit` marker of the scene file reached with the lamp held, `objectives: [{"kind": "exit", ...}]`, schema 1 extended). Each transition saves a checkpoint (phase, player pose, door state and angle, lamp state, switch, socket, pose); a catch restores it within the same tick, the machine goes back to the start of its path (never staged into view), the temporal history is reset (a camera cut), and the sting plays with its text cue. The pause menu's Restart restores the same checkpoint, or the whole route after "escaped".
+- Consequence: no progress outside the demo is touched and no process restart is needed (spec §15); the introduction checkpoint is the initial state; the objective line, chime, and end card come from the phase.
+
+## D-045 (2026-09-07) T14 by a CPU-only run and a world-state hash
+
+- Decision: `--simulate-only` runs a replay through the same `World`, `Simulation`, and state checks with no device, window, or renderer, and prints an FNV-1a hash over every tick's objective phase, threat state and pose, player pose, lamp, door angle and state, and catches. Rendered runs take `--expect-state-hash` and fail when their hash differs. The T14 tests run the route replay in raw and denoised modes, at exposure 0.25, and at a 960x540 internal size against the CPU-only constant, so exposure, resolution, and reconstruction provably leave the rules alone.
+- Consequence: the constants are goldens regenerated on purpose only; the game layer's independence from rendering is a tested property, not a claim.
+
 ## D-013 (2026-09-06) Repository workflow for this session
 
 - Decision: work on branch `m0-m1-bootstrap` with small commits; nothing is pushed; `build/` and `artifacts/` are ignored. The owner decides on merging.

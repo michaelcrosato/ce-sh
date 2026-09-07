@@ -157,7 +157,7 @@ std::vector<Command> Director::Update(const WorldSnapshot& s, float dt) {
     }
     if (s.catchSting) {
         out.push_back(OneShot(ClipId::CatchSting, s.playerFeet, 1.0f, false, false));
-        out.push_back(Cue("Caught"));
+        out.push_back(Cue("Caught: back to the last checkpoint"));
     }
 
     last_ = s;

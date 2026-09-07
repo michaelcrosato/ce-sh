@@ -7,10 +7,12 @@
 #include "core/build_info.h"
 #include "core/clock.h"
 #include "core/error.h"
+#include "core/image_write.h"
 #include "core/json_writer.h"
 #include "core/log.h"
 #include "game/replay.h"
 #include "game/simulation.h"
+#include "game/state_checks.h"
 #include "game/world.h"
 #include "graphics/d3d12/device.h"
 #include "graphics/d3d12/graphics_queue.h"
@@ -210,14 +212,6 @@ audio::WorldSnapshot AudioSnapshotOf(game::World& world, const std::vector<Audio
     return s;
 }
 
-// Stand-in objective line until the objective state machine (M5 Task 5) drives it.
-std::string ObjectiveFor(game::World& world) {
-    const game::Lamp& lamp = world.GetLamp();
-    if (lamp.State() == game::LampState::Held) return "Carry the lamp to the shelf in the far room";
-    if (lamp.SocketName() == world.Level().shelfSocket.name) return "The lamp is on the shelf. Look around";
-    return "Find the lamp and pick it up";
-}
-
 // Evaluates one radiance-style expectation on the readback. Returns the pass/fail and a detail line.
 bool EvaluateRadianceExpectation(const RadianceExpectation& r, const Camera& camera, const CaptureImages& images, std::string& detail) {
     switch (r.kind) {
@@ -285,7 +279,69 @@ int Application::Run() {
     if (options_.listAdapters) {
         return RunListAdapters();
     }
+    if (options_.simulateOnly) {
+        return RunSimulateOnly();
+    }
     return RunRender();
+}
+
+int Application::RunSimulateOnly() {
+    // Spec §15 / T14: the rules run without any renderer. The same ticks, checks, and hash as the
+    // rendered runs; a GPU run with --expect-state-hash must reproduce this hash.
+    SetAssetRoot(files::ExecutableDirectory() / "assets");
+    const std::filesystem::path levelFile = options_.sceneFile ? *options_.sceneFile : std::filesystem::path(kTwoRoomSceneFile);
+    SceneFileResult loaded = LoadSceneFile(levelFile, AssetRoot());
+    if (!loaded.Ok()) {
+        log::Error("scene file '{}' is invalid ({} problem(s)):", loaded.sourceName, loaded.errors.size());
+        for (const std::string& e : loaded.errors) log::Error("  {}", e);
+        return kExitUsage;
+    }
+    std::string error;
+    const std::optional<game::Replay> replay = game::Replay::Load(*options_.replay, error);
+    if (!replay) {
+        log::Error("{}", error);
+        return kExitUsage;
+    }
+    const game::ThreatBehaviour behaviour = replay->hunt ? game::ThreatBehaviour::Hunt : game::ThreatBehaviour::Patrol;
+    game::World world(std::move(*loaded.level), behaviour);
+    game::StateCheckLog checks(*replay);
+    const std::uint64_t ticks = options_.stopAtTick >= 0 ? static_cast<std::uint64_t>(options_.stopAtTick) : replay->LastTick() + 1;
+    game::Simulation simulation(replay->tickRate);
+    log::Info("simulate-only: replay '{}' for {} ticks at {} Hz, threat {}, scene hash {:016x}", options_.replay->string(), ticks, replay->tickRate,
+              game::ThreatBehaviourName(behaviour), loaded.contentHash);
+    simulation.RunTicks(static_cast<std::uint32_t>(ticks), [&](std::uint64_t tick, float dt) {
+        world.Tick(replay->InputAt(tick), dt);
+        for (const std::string& e : world.TakeEvents()) log::Info("{}", e);
+        checks.AfterTick(world, tick + 1);
+    });
+    for (const std::string& line : checks.Lines()) log::Info("{}", line);
+    const math::Vec3 feet = world.GetPlayer().Current().position;
+    const PoseSpec threat = world.GetThreat().Current();
+    log::Info("simulate-only: {} ticks; objective {}, threat {} at ({:.2f}, {:.2f}, {:.2f}), catches {}, restarts {}, player at ({:.2f}, {:.2f}, {:.2f}), "
+              "lamp {} ({}), door {}; state hash {:016x}",
+              simulation.Tick(), game::ObjectivePhaseName(world.Phase()), game::ThreatStateName(world.GetThreat().State()), threat.position.x, threat.position.y,
+              threat.position.z, world.Catches(), world.Restarts(), feet.x, feet.y, feet.z, world.GetLamp().IsOn() ? "on" : "off",
+              world.GetLamp().State() == game::LampState::Held ? "held" : world.GetLamp().SocketName(), game::DoorStateName(world.GetDoor().State()),
+              world.StateHash());
+    std::printf("STATE HASH %016llx\n", static_cast<unsigned long long>(world.StateHash()));
+    int problems = static_cast<int>(checks.Failed() + checks.Pending());
+    if (checks.Pending() != 0) log::Error("{} state check(s) never reached their tick", checks.Pending());
+    if (options_.expectStateHash) {
+        const bool same = *options_.expectStateHash == world.StateHash();
+        log::Info("state hash {:016x} expected {:016x} -> {}", world.StateHash(), *options_.expectStateHash, same ? "PASS" : "FAIL");
+        if (!same) ++problems;
+    }
+    if (options_.validate || options_.expectStateHash) {
+        if (problems == 0) {
+            log::Info("VALIDATION PASSED ({} state check(s))", checks.Evaluated());
+            std::printf("VALIDATION PASSED\n");
+            return kExitOk;
+        }
+        log::Error("VALIDATION FAILED: {} problem(s)", problems);
+        std::printf("VALIDATION FAILED: %d problem(s)\n", problems);
+        return kExitFailure;
+    }
+    return kExitOk;
 }
 
 int Application::RunListAdapters() {
@@ -346,6 +402,8 @@ int Application::RunRender() {
     if (fileLevel && !loadLevel(level)) {
         return kExitUsage;
     }
+    // The threat's behaviour: replays carry it (the visual tests keep the deterministic path); play uses --threat.
+    game::ThreatBehaviour threatBehaviour = options_.threat == "hunt" ? game::ThreatBehaviour::Hunt : game::ThreatBehaviour::Patrol;
     if (simulated) {
         if (!fileLevel) {
             log::Error("--play and --replay drive the 'two_room' scene (or a --scene-file); got '{}'", options_.scene);
@@ -358,12 +416,13 @@ int Application::RunRender() {
                 log::Error("{}", error);
                 return kExitUsage;
             }
+            threatBehaviour = replay->hunt ? game::ThreatBehaviour::Hunt : game::ThreatBehaviour::Patrol;
             if (!replay->scene.empty() && replay->scene != level->description.name) {
                 log::Error("replay '{}' was recorded for scene '{}', not '{}'", options_.replay->string(), replay->scene, level->description.name);
                 return kExitUsage;
             }
         }
-        world = std::make_unique<game::World>(std::move(*level));
+        world = std::make_unique<game::World>(std::move(*level), threatBehaviour);
         level.reset();
         recording.scene = world->Level().description.name;
         recording.seed = options_.seed;
@@ -493,9 +552,19 @@ int Application::RunRender() {
         // Simulation setup.
         game::Simulation simulation(replay ? replay->tickRate : 60);
         const bool frozenReplay = replay && options_.stopAtTick >= 0;
+        // World-state checks run right after their tick, in every replay mode (T14/T15).
+        std::unique_ptr<game::StateCheckLog> stateChecks;
+        if (replay && world) stateChecks = std::make_unique<game::StateCheckLog>(*replay);
+        auto afterTick = [&](std::uint64_t tick) {
+            for (const std::string& e : world->TakeEvents()) log::Info("{}", e);
+            if (stateChecks) stateChecks->AfterTick(*world, tick + 1);
+        };
         if (world && frozenReplay) {
             const auto stopTick = static_cast<std::uint32_t>(options_.stopAtTick);
-            simulation.RunTicks(stopTick, [&](std::uint64_t tick, float dt) { world->Tick(replay->InputAt(tick), dt); });
+            simulation.RunTicks(stopTick, [&](std::uint64_t tick, float dt) {
+                world->Tick(replay->InputAt(tick), dt);
+                afterTick(tick);
+            });
             log::Info("replay '{}': advanced {} ticks; door {}, lamp {} ({}), threat at ({:.2f}, {:.2f}, {:.2f}), player at ({:.2f}, {:.2f}, {:.2f})",
                       options_.replay->string(), stopTick, game::DoorStateName(world->GetDoor().State()),
                       world->GetLamp().IsOn() ? "on" : "off", world->GetLamp().State() == game::LampState::Held ? "held" : world->GetLamp().SocketName(),
@@ -662,6 +731,8 @@ int Application::RunRender() {
                 showDiagnostics = !showDiagnostics;
             }
             bool clearInput = window != nullptr;
+            bool restartedThisFrame = false;  // A catch or a menu restart: a camera cut for the temporal history.
+            bool advancedThisFrame = false;   // The objective reached a new phase.
 
             // Simulation (spec §9 order: input, fixed-step ticks, interpolated render data).
             float alpha = 1.0f;
@@ -676,6 +747,9 @@ int Application::RunRender() {
                             first = false;
                             if (overlay.introCard && InputIsActive(input)) overlay.introCard = false;
                             world->Tick(input, dt);
+                            restartedThisFrame = restartedThisFrame || world->JustRestarted();
+                            advancedThisFrame = advancedThisFrame || world->JustAdvanced();
+                            afterTick(tick);
                             if (options_.record) recording.Record(tick, input);
                         });
                         alpha = step.alpha;
@@ -693,7 +767,9 @@ int Application::RunRender() {
                     overlay.prompt = target ? PromptFor(*world, *target) : std::string();
                     const bool lampNear = world->GetLamp().State() == game::LampState::Held || targetName == "lamp";
                     overlay.hint = lampNear ? (world->GetLamp().IsOn() ? "Switch the lamp off" : "Switch the lamp on") : std::string();
-                    overlay.objectiveLine = ObjectiveFor(*world);
+                    overlay.objectiveLine = game::ObjectiveText(world->Phase());
+                    overlay.endCard = world->Phase() == game::ObjectivePhase::Escaped;
+                    if (world->Phase() != game::ObjectivePhase::Introduction) overlay.introCard = false;
                 } else if (!frozenReplay) {
                     if (benchmark && simulation.Tick() > replay->LastTick()) {
                         world->Reset();  // Back to the start: a camera cut, so the temporal history is invalid.
@@ -706,8 +782,19 @@ int Application::RunRender() {
                         ++replayLoops;
                         log::Info("benchmark: replay loop {} restarts at frame {}", replayLoops, frameIndex);
                     }
-                    simulation.RunTicks(1, [&](std::uint64_t tick, float dt) { world->Tick(replay->InputAt(tick), dt); });
+                    simulation.RunTicks(1, [&](std::uint64_t tick, float dt) {
+                        world->Tick(replay->InputAt(tick), dt);
+                        restartedThisFrame = restartedThisFrame || world->JustRestarted();
+                        advancedThisFrame = advancedThisFrame || world->JustAdvanced();
+                        afterTick(tick);
+                    });
                     alpha = 1.0f;
+                }
+                if (restartedThisFrame) {
+                    renderer.ResetHistory();  // The player jumped to the checkpoint: a camera cut.
+                    if (ui && options_.play) {
+                        overlay.prompt.clear();
+                    }
                 }
                 worldChanged = world->WriteRenderScene(*scenePtr, alpha);
                 if (worldChanged) ++motionFrames;
@@ -717,7 +804,10 @@ int Application::RunRender() {
                     // Sound follows the world state written above; the listener is the camera; occlusion
                     // asks the collision solids (the door leaf included) between the eye and the source.
                     const float audioDt = !options_.play ? 1.0f / static_cast<float>(tickRate) : static_cast<float>(realSeconds);
-                    const std::vector<audio::Command> commands = audioDirector.Update(AudioSnapshotOf(*world, audioFixtures), audioDt);
+                    audio::WorldSnapshot audioSnapshot = AudioSnapshotOf(*world, audioFixtures);
+                    audioSnapshot.objectiveChime = advancedThisFrame;
+                    audioSnapshot.catchSting = restartedThisFrame && world->Catches() > 0;
+                    const std::vector<audio::Command> commands = audioDirector.Update(audioSnapshot, audioDt);
                     audio::Listener listener;
                     listener.position = camera.position;
                     listener.forward = camera.Forward();
@@ -762,7 +852,9 @@ int Application::RunRender() {
                         const PoseSpec tp = world->GetThreat().Current();
                         d.threat = std::format("({:.2f}, {:.2f}, {:.2f}) along {:.1f} of {:.1f} m", tp.position.x, tp.position.y, tp.position.z,
                                                world->GetThreat().Distance(), world->GetThreat().PathLength());
-                        d.objective = ObjectiveFor(*world);
+                        d.threat += std::format(", {} [{}]", game::ThreatStateName(world->GetThreat().State()), game::ThreatBehaviourName(world->Behaviour()));
+                        d.objective = std::format("{}: {} (catches {}, restarts {})", game::ObjectivePhaseName(world->Phase()), game::ObjectiveText(world->Phase()),
+                                                  world->Catches(), world->Restarts());
                     }
                     d.sceneFile = levelFile.string();
                     d.sceneHash = sceneContentHash != 0 ? sceneContentHash : scenePtr->ContentHash();
@@ -791,14 +883,20 @@ int Application::RunRender() {
                 log::Info("resumed from the menu");
             }
             if (menuAction == ui::MenuAction::Restart && world) {
-                world->Reset();  // A camera cut: the temporal history is invalid.
-                renderer.ResetHistory();
-                simulation = game::Simulation(tickRate);
+                // Spec §15 restart command: the last checkpoint; after the route is complete, the whole route.
+                if (world->Phase() == game::ObjectivePhase::Escaped) {
+                    world->Reset();
+                    simulation = game::Simulation(tickRate);
+                } else {
+                    world->RestartFromCheckpoint();
+                }
+                renderer.ResetHistory();  // A camera cut: the temporal history is invalid.
                 if (audio) {
                     audio->StopAll();
                     audioDirector.Reset();
                 }
-                log::Info("restart from the menu at frame {}", frameIndex);
+                for (const std::string& e : world->TakeEvents()) log::Info("{}", e);
+                log::Info("restart from the menu at frame {} (objective {})", frameIndex, game::ObjectivePhaseName(world->Phase()));
             }
             menuReload = menuAction == ui::MenuAction::Reload;
 
@@ -810,7 +908,7 @@ int Application::RunRender() {
                 std::optional<TwoRoomLevel> fresh;
                 if (loadLevel(fresh)) {
                     queue.WaitIdle();
-                    world = std::make_unique<game::World>(std::move(*fresh));
+                    world = std::make_unique<game::World>(std::move(*fresh), threatBehaviour);
                     scenePtr = &world->GetScene();
                     renderer.SetScene(*scenePtr);
                     renderer.ResetHistory();
@@ -857,10 +955,14 @@ int Application::RunRender() {
 
             renderer.BeginFrame();
             renderer.RecordTrace(snapshot);
+            const bool captureBackBufferNow = swapChain && options_.captureBackBuffer >= 0 && frameIndex == static_cast<std::uint32_t>(options_.captureBackBuffer);
             if (swapChain) {
                 renderer.RecordCopyToBackBuffer(swapChain->CurrentBackBuffer(), swapChain->Width(), swapChain->Height());
                 if (ui) {
                     renderer.RecordOverlay([&](ID3D12GraphicsCommandList4* list) { ui->Render(list, swapChain->CurrentBackBuffer()); });
+                }
+                if (captureBackBufferNow) {
+                    renderer.RecordBackBufferReadback(swapChain->CurrentBackBuffer(), swapChain->Width(), swapChain->Height());
                 }
             }
             renderer.EndFrame();
@@ -872,6 +974,43 @@ int Application::RunRender() {
                     break;
                 }
                 LC_CHECK_HR(hr);
+            }
+            if (captureBackBufferNow) {
+                // Evidence for the presented image: the back buffer as submitted, with its alpha channel.
+                queue.WaitIdle();
+                std::uint32_t bbWidth = 0;
+                std::uint32_t bbHeight = 0;
+                const std::vector<std::uint8_t> bb = renderer.TakeBackBufferReadback(bbWidth, bbHeight);
+                std::size_t alphaBelow = 0;
+                std::size_t allZero = 0;
+                std::uint32_t minX = bbWidth, minY = bbHeight, maxX = 0, maxY = 0;
+                ImageRgba8 colour{bbWidth, bbHeight, bb};
+                ImageRgba8 alphaImage{bbWidth, bbHeight, std::vector<std::uint8_t>(bb.size())};
+                for (std::uint32_t y = 0; y < bbHeight; ++y) {
+                    for (std::uint32_t x = 0; x < bbWidth; ++x) {
+                        const std::size_t i = (static_cast<std::size_t>(y) * bbWidth + x) * 4;
+                        const std::uint8_t a = bb[i + 3];
+                        if (a != 255) {
+                            ++alphaBelow;
+                            minX = std::min(minX, x);
+                            minY = std::min(minY, y);
+                            maxX = std::max(maxX, x);
+                            maxY = std::max(maxY, y);
+                        }
+                        if (a == 0 && bb[i] == 0 && bb[i + 1] == 0 && bb[i + 2] == 0) ++allZero;
+                        colour.pixels[i + 3] = 255;
+                        alphaImage.pixels[i] = alphaImage.pixels[i + 1] = alphaImage.pixels[i + 2] = a;
+                        alphaImage.pixels[i + 3] = 255;
+                    }
+                }
+                std::error_code ec;
+                std::filesystem::create_directories(*options_.capture, ec);
+                const std::filesystem::path colourPath = *options_.capture / std::format("backbuffer_frame{}.png", frameIndex);
+                const std::filesystem::path alphaPath = *options_.capture / std::format("backbuffer_frame{}_alpha.png", frameIndex);
+                files::WriteBinaryFile(colourPath, EncodePng(colour));
+                files::WriteBinaryFile(alphaPath, EncodePng(alphaImage));
+                log::Info("back buffer frame {}: {}x{}, {} pixel(s) with alpha != 255 ({} fully zero){} -> {}", frameIndex, bbWidth, bbHeight, alphaBelow, allZero,
+                          alphaBelow ? std::format(", bounding box x [{}..{}] y [{}..{}]", minX, maxX, minY, maxY) : std::string(), colourPath.string());
             }
             if (keepRenderedInstances) {
                 renderedInstances = scenePtr->Instances();  // The image just rendered: current and previous transforms.
@@ -1515,6 +1654,22 @@ int Application::RunRender() {
                     if (!frozenReplay && motionFrames + 1 != renderer.TlasRebuildCount() && motionFrames != renderer.TlasRebuildCount()) {
                         log::Error("TLAS rebuilt {} times but the world changed transforms in {} frames", renderer.TlasRebuildCount(), motionFrames);
                         ++problems;
+                    }
+                }
+
+                // World-state checks (evaluated at their ticks) and the rule-invariance hash (T14).
+                if (stateChecks) {
+                    for (const std::string& line : stateChecks->Lines()) log::Info("{}", line);
+                    if (stateChecks->Pending() != 0) log::Error("{} state check(s) never reached their tick", stateChecks->Pending());
+                    problems += static_cast<int>(stateChecks->Failed() + stateChecks->Pending());
+                }
+                if (world && replay) {
+                    log::Info("state hash {:016x} after {} ticks (objective {}, catches {}, restarts {})", world->StateHash(), simulation.Tick(),
+                              game::ObjectivePhaseName(world->Phase()), world->Catches(), world->Restarts());
+                    if (options_.expectStateHash) {
+                        const bool same = *options_.expectStateHash == world->StateHash();
+                        log::Info("state hash expected {:016x} -> {}", *options_.expectStateHash, same ? "PASS" : "FAIL");
+                        if (!same) ++problems;
                     }
                 }
 

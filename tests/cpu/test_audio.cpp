@@ -285,7 +285,7 @@ LC_TEST(audio_director_threat_loop_runs_only_while_it_moves_and_cues_when_near) 
     s.catchSting = true;
     c = d.Update(s, 1.0f / 60.0f);
     LC_CHECK_EQ(CountClip(c, ClipId::CatchSting, Command::Kind::PlayOneShot), 1u);
-    LC_CHECK(HasCue(c, "Caught"));
+    LC_CHECK(HasCue(c, "Caught: back to the last checkpoint"));
 }
 
 LC_TEST(audio_system_without_a_device_keeps_the_cues_and_drops_nothing_else) {

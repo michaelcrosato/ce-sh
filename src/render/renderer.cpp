@@ -803,6 +803,56 @@ void Renderer::RecordOverlay(const std::function<void(ID3D12GraphicsCommandList4
     timers_.End(list_.Get(), timer);
 }
 
+void Renderer::RecordBackBufferReadback(ID3D12Resource* backBuffer, std::uint32_t width, std::uint32_t height) {
+    if (!frameOpen_) {
+        throw Error("Renderer::RecordBackBufferReadback called outside BeginFrame/EndFrame");
+    }
+    const D3D12_RESOURCE_DESC desc = backBuffer->GetDesc();
+    UINT rows = 0;
+    UINT64 rowSize = 0;
+    UINT64 total = 0;
+    device_.Get()->GetCopyableFootprints(&desc, 0, 1, 0, &backBufferPlan_.footprint, &rows, &rowSize, &total);
+    backBufferPlan_.rowCount = rows;
+    backBufferPlan_.rowSizeBytes = rowSize;
+    backBufferPlan_.totalBytes = total;
+    if (!backBufferReadback_.IsValid() || backBufferReadback_.Size() < total) {
+        backBufferReadback_ = gfx::GpuBuffer::CreateReadback(device_, L"Readback Back Buffer", total);
+    }
+    const D3D12_RESOURCE_BARRIER toSource = gfx::TransitionBarrier(backBuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    list_->ResourceBarrier(1, &toSource);
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.pResource = backBufferReadback_.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint = backBufferPlan_.footprint;
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.pResource = backBuffer;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    src.SubresourceIndex = 0;
+    list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    const D3D12_RESOURCE_BARRIER toPresent = gfx::TransitionBarrier(backBuffer, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
+    list_->ResourceBarrier(1, &toPresent);
+    backBufferReadbackWidth_ = width;
+    backBufferReadbackHeight_ = height;
+    backBufferReadbackPending_ = true;
+}
+
+std::vector<std::uint8_t> Renderer::TakeBackBufferReadback(std::uint32_t& width, std::uint32_t& height) {
+    std::vector<std::uint8_t> pixels;
+    width = 0;
+    height = 0;
+    if (!backBufferReadbackPending_) return pixels;
+    backBufferReadbackPending_ = false;
+    width = backBufferReadbackWidth_;
+    height = backBufferReadbackHeight_;
+    pixels.resize(static_cast<std::size_t>(width) * height * 4);
+    const auto* base = static_cast<const std::uint8_t*>(backBufferReadback_.Map());
+    for (std::uint32_t y = 0; y < height; ++y) {
+        const std::uint8_t* row = base + backBufferPlan_.footprint.Offset + static_cast<std::size_t>(y) * backBufferPlan_.footprint.Footprint.RowPitch;
+        std::memcpy(pixels.data() + static_cast<std::size_t>(y) * width * 4, row, static_cast<std::size_t>(width) * 4);
+    }
+    return pixels;
+}
+
 std::uint64_t Renderer::EndFrame() {
     if (!frameOpen_) {
         throw Error("Renderer::EndFrame called without BeginFrame");

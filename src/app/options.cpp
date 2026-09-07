@@ -85,12 +85,16 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     p.AddIntOption("frames", "Exit after this many rendered frames; 0 = run until closed (reference mode: until --spp is reached).", 0);
     p.AddFloatOption("fov", "Horizontal field of view in degrees at the current aspect ratio.", 90.0f);
     p.AddStringOption("capture", "Directory that receives PNG, PFM, and JSON captures of the final image.", "");
+    p.AddIntOption("capture-backbuffer", "Windowed runs with --capture: also write the presented back buffer (interface included, alpha as a second image) of this frame.", -1);
     p.AddStringOption("stats", "Write patch means and standard errors of the scene's statistics patches to this JSON file.", "");
     p.AddStringOption("env-report", "Write a JSON environment report to this file.", "");
     p.AddStringOption("log", "Append the log to this file.", "");
     p.AddFlag("play", "Live play (scene two_room): WASD move, mouse look, Shift sprint, E interact, F lamp, Escape releases the cursor.");
     p.AddFlag("no-ui", "Windowed runs: no prompts, pause menu (Escape), or diagnostic panel (F1); the benchmark never draws them.");
     p.AddFlag("no-audio", "Windowed runs: open no audio device (sound events still produce their text cues).");
+    p.AddStringOption("threat", "With --play: the threat's behaviour, 'hunt' (patrol, chase, investigate, wait) or 'patrol' (the fixed path). Replays carry their own 'threat' field.", "hunt");
+    p.AddFlag("simulate-only", "With --replay: run the simulation without any graphics, evaluate the world-state checks, print the state hash, and exit.");
+    p.AddStringOption("expect-state-hash", "With --replay: 16 hex digits; the run fails when the final world-state hash differs (T14: rules do not depend on rendering).", "");
     p.AddStringOption("record", "With --play: write the per-tick input to this replay file on exit.", "");
     p.AddStringOption("replay", "Drive the simulation from this replay file (one tick per frame; deterministic).", "");
     p.AddIntOption("stop-at-tick", "With --replay: advance exactly this many ticks before rendering, then freeze (for reference mode and checks).", -1);
@@ -268,6 +272,11 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     }
 
     if (const std::string s = p.GetString("capture"); !s.empty()) o.capture = std::filesystem::path(s);
+    o.captureBackBuffer = p.GetInt("capture-backbuffer");
+    if (o.captureBackBuffer >= 0 && (!o.capture || o.headless)) {
+        result.error = "--capture-backbuffer needs --capture <dir> and a window";
+        return result;
+    }
     if (const std::string s = p.GetString("stats"); !s.empty()) o.stats = std::filesystem::path(s);
     if (const std::string s = p.GetString("env-report"); !s.empty()) o.envReport = std::filesystem::path(s);
     if (const std::string s = p.GetString("log"); !s.empty()) o.logFile = std::filesystem::path(s);
@@ -284,6 +293,27 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     if (const std::string s = p.GetString("replay"); !s.empty()) o.replay = std::filesystem::path(s);
     o.stopAtTick = p.GetInt("stop-at-tick");
     o.mouseSensitivity = p.GetFloat("sensitivity");
+    o.threat = p.GetString("threat");
+    if (o.threat != "hunt" && o.threat != "patrol") {
+        result.error = std::format("--threat must be 'hunt' or 'patrol' (got '{}')", o.threat);
+        return result;
+    }
+    o.simulateOnly = p.Has("simulate-only");
+    if (o.simulateOnly && !o.replay) {
+        result.error = "--simulate-only requires --replay";
+        return result;
+    }
+    if (const std::string h = p.GetString("expect-state-hash"); !h.empty()) {
+        if (!o.replay) {
+            result.error = "--expect-state-hash requires --replay";
+            return result;
+        }
+        if (h.size() != 16 || h.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) {
+            result.error = std::format("--expect-state-hash must be 16 hex digits (got '{}')", h);
+            return result;
+        }
+        o.expectStateHash = std::stoull(h, nullptr, 16);
+    }
     if (o.play && o.headless) {
         result.error = "--play needs a window; remove --headless";
         return result;

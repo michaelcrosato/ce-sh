@@ -94,6 +94,20 @@ swept back toward the player where it would enter a solid; a closing door that m
 swings back open. The placeholder body (torso and hands, `player_suit`) is placed so it stays out
 of the direct view except at steep pitches and appears in mirrors and shadows.
 
+The route (spec §15, the proof's objective): take the lamp from the floor socket, carry it to the
+shelf in the inspection room, take it back, and reach the exit corner of the equipment room with
+it. The maintenance machine patrols the first hall by default in play (`--threat hunt`): it
+detects the player from gameplay data only (a carried, lit lamp within 8 m, an unlit player within
+2.5 m, inside its 60-degree facing cone, with a clear line through the collision solids, never
+through the closed door), chases at 1.8 m/s (walk 1.5, sprint 2.6), investigates the last seen
+position, waits, and returns to its round; contact within 0.6 m is a catch, which restarts from the
+last checkpoint (the state saved when the current phase began) with the machine back on its path.
+The pause menu's Restart does the same on demand (and restarts the whole route once it is complete).
+`--threat patrol` keeps the deterministic path of the visual tests; replays carry their own
+`"threat": "hunt"` field. `--replay <file> --simulate-only` runs a replay with no graphics at all
+(the world-state checks and the final state hash), and `--expect-state-hash <16 hex digits>` makes
+any run fail when its hash differs (T14).
+
 Sound (windowed runs, `--no-audio` to open no device): fixture hums that follow the circuit and
 emitter state, the carried lamp's hum at the fixture transform, footsteps, the door's creak and
 thud, the lamp's click and handling, the machine's movement loop, and a room tone; positional
@@ -118,6 +132,11 @@ root (paths outside it are refused); in play mode **R** reloads the current file
 boundary (an invalid file is reported line by line and the running scene stays);
 `--reload-test` with `--replay` or `--play` does one reload at frame 2 headlessly and verifies it.
 Captures and benchmark reports record the file and its content hash.
+
+`--capture-backbuffer <frame>` (windowed, with `--capture <dir>`) writes the presented back buffer
+of that frame, interface included, as `backbuffer_frame<N>.png` plus its alpha channel as
+`backbuffer_frame<N>_alpha.png`, and logs how many pixels have alpha below 255 (the evidence
+behind KI-028: desktop screen captures of the window can show holes the app never draws).
 
 `--history-frames`, `--prepass-radius`, `--blur-radius`, `--no-antifirefly`,
 `--validation-overlay`, and `--reset-on-source-change` tune the denoiser (docs/RENDERING.md);

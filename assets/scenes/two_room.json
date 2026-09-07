@@ -65,7 +65,8 @@
   "markers": [
     {"id": "player_start", "position": [2.5, 0.0, 1.2], "yaw": -1.5707963},
     {"id": "mirror_check_camera", "position": [5.2, 0.0, 10.3], "yaw": 3.1415927},
-    {"id": "threat_check", "position": [7.0, 0.0, 1.9]}
+    {"id": "threat_check", "position": [7.0, 0.0, 1.9]},
+    {"id": "exit", "position": [0.9, 0.0, 0.9]}
   ],
   "entities": {
     "player": {"start": "player_start", "torso": "player_torso", "handLeft": "player_hand_l", "handRight": "player_hand_r"},
@@ -74,5 +75,7 @@
     "threat": {"body": "threat_body", "head": "threat_head", "path": "threat_route", "parkAt": "threat_check"},
     "mirror": {"object": "mirror", "checkCamera": "mirror_check_camera", "aimAt": "threat_check", "hallFloor": "floor"}
   },
-  "objectives": []
+  "objectives": [
+    {"id": "escape", "kind": "exit", "marker": "exit", "radius": 0.8}
+  ]
 }

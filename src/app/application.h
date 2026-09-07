@@ -16,6 +16,8 @@ public:
 private:
     int RunListAdapters();
     int RunRender();
+    // --simulate-only: the replay's ticks without any graphics (rules are independent of rendering).
+    int RunSimulateOnly();
 
     AppOptions options_;
 };

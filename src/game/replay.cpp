@@ -131,6 +131,8 @@ std::string Replay::ToJson() const {
             j.Field("settleFraction", static_cast<double>(c.settleFraction));
             j.Field("fromFrame", static_cast<std::uint64_t>(c.fromFrame));
         }
+        if (!c.state.empty()) j.Field("state", c.state);
+        if (c.kind == "caught_count") j.Field("count", c.count);
         j.EndObject();
     }
     j.EndArray();
@@ -158,6 +160,12 @@ std::optional<Replay> Replay::FromJson(std::string_view text, std::string& error
     r.scene = root.StringOr("scene", "");
     r.tickRate = static_cast<std::uint32_t>(root.NumberOr("tickRate", 60));
     r.seed = static_cast<std::uint32_t>(root.NumberOr("seed", 0));
+    const std::string threat = root.StringOr("threat", "patrol");
+    if (threat != "patrol" && threat != "hunt") {
+        error = std::format("replay JSON: threat must be 'patrol' or 'hunt', not '{}'", threat);
+        return std::nullopt;
+    }
+    r.hunt = threat == "hunt";
     if (r.tickRate == 0 || r.tickRate > 1000) {
         error = "replay JSON: tickRate must be within 1..1000";
         return std::nullopt;
@@ -215,6 +223,8 @@ std::optional<Replay> Replay::FromJson(std::string_view text, std::string& error
             check.maxLagFrames = static_cast<std::uint32_t>(c.NumberOr("maxLagFrames", 6));
             check.settleFraction = static_cast<float>(c.NumberOr("settleFraction", 0.8));
             check.fromFrame = static_cast<std::uint64_t>(c.NumberOr("fromFrame", 0));
+            check.state = c.StringOr("state", "");
+            check.count = static_cast<std::uint32_t>(c.NumberOr("count", 0));
             bool known = false;
             for (const char* k : kReplayCheckKinds) known = known || check.kind == k;
             if (!known) {
@@ -231,6 +241,14 @@ std::optional<Replay> Replay::FromJson(std::string_view text, std::string& error
             }
             if (check.kind == "motion" && check.entity.empty()) {
                 error = std::format("replay JSON: motion check '{}' needs an entity", check.description);
+                return std::nullopt;
+            }
+            if ((check.kind == "objective_state" || check.kind == "threat_state") && check.state.empty()) {
+                error = std::format("replay JSON: {} check '{}' needs a state", check.kind, check.description);
+                return std::nullopt;
+            }
+            if (check.kind == "player_near" && !check.point) {
+                error = std::format("replay JSON: player_near check '{}' needs a point", check.description);
                 return std::nullopt;
             }
             r.checks.push_back(check);

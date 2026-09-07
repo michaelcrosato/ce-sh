@@ -10,6 +10,16 @@
 
 **Spec:** §4 (sequence, player abilities), §14 (movement, placement, body, interaction, doors), §15 (threat, objective, sound), §16 (scene file: collision shapes, objective events), §19 T13–T15, §20 M5 gate, §21 (restart), §22.
 
+**Status (2026-09-07):** Tasks 1–5 implemented, tested, and committed on `m0-m1-bootstrap`
+(collision and body; interface; sound; rules with T14/T15). Deviations from the text below, all
+recorded in `docs/DECISIONS.md` and `docs/KNOWN_ISSUES.md`: the T13 collision proof is the CPU
+test suite plus every replay running against the solids (no `t13_walls.json`); the body sits
+behind the eye axis, not 0.15 m in front (D-039); the panel shows the reload result but has no
+buttons (the blackout hook stays a command-line option); occlusion is a level factor without
+filtering; the T14 invariance check is a world-state hash reproduced by a CPU-only run rather
+than a log comparison. Task 6 (performance with the M5 content, the human play-through, the gate
+decision) is in progress.
+
 ## Global Constraints
 
 - "The camera and carried lamp must not enter a wall. Sweep the lamp's placement volume and move it back toward the player when it would intersect geometry." "Do not render the lamp through walls. Do not disable its shadows while it is held." (§14)

@@ -14,7 +14,7 @@ State at milestone M1. Everything below exists in the code; nothing is a plan.
 | `lc_graphics` | `src/graphics/d3d12` | Device/adapter/feature checks, queue + fence, swap chain, descriptor heap, buffers, UAV textures + readback, upload arena, timestamp queries, BLAS/TLAS, root signature + compute PSO | `lc_platform` |
 | `lc_render` | `src/render` | `SceneGpu` (geometry residency, BLAS per mesh, TLAS, per-frame instance/material/emitter tables), `Renderer` (diagnostic pass, path tracer in raw and reference modes, the denoised path: guided trace, NRD, compose, resampling; accumulation, readback, layout probe), `NrdDenoiser` (D3D12 backend for NRD's API), capture and sequence writers | `lc_graphics`, `lc_scene`, `NRD` |
 | `lc_scene` (scene files) | `src/scene/scene_file.*` | Versioned JSON scene files: parse, validate every rule and limit, asset-root containment, then build the level through the room kit; `assets/scenes/two_room.json` is the proof level | `lc_core` (JSON reader) |
-| `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks), `CollisionWorld` (yaw-only boxes, capsule push-out, sphere sweep, segment tests), `World` (player with the capsule, door that never traps, lamp fixture with the sweep, threat, placeholder body, interaction, reset) | `lc_scene`, `lc_core` |
+| `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks, the threat behaviour), `CollisionWorld` (yaw-only boxes, capsule push-out, sphere sweep, segment tests), `World` (player with the capsule, door that never traps, lamp fixture with the sweep, `Threat` with the patrol path or the hunt state machine on gameplay data, placeholder body, interaction, objective phases with checkpoints, catch and restart, the world-state hash, events), `StateCheckLog` (world-state replay checks) | `lc_scene`, `lc_core` |
 | `lc_miniaudio` | `external/miniaudio` (built by `src/audio/CMakeLists.txt`) | miniaudio compiled once as C: WASAPI backend only, no decoding, encoding, generators, or resource manager | nothing |
 | `lc_audio` | `src/audio` | Generated clips with provenance (`clips.*`), the sound rules (`director.*`: inverse-square attenuation, pan from the listener's right axis, the occlusion factor, events that follow the world state, text cues), and the device layer (`audio_system.*`: a 24-voice pool on miniaudio, volumes per category, pause) | `lc_core`, `lc_miniaudio` |
 | `lc_imgui` | `external/imgui` (built by `src/ui/CMakeLists.txt`) | Dear ImGui core with the Win32 and D3D12 backends, third-party code compiled without `/WX` | `d3dcompiler` (backend start-up) |
@@ -34,7 +34,10 @@ Window::PumpMessages            window events (the interface hook sees every mes
 Simulation::Advance             live play: real time -> whole 60 Hz ticks (capped at 0.25 s per frame), remainder = alpha
   or RunTicks                   replay: exactly one tick per frame, or all ticks up to --stop-at-tick before rendering
 World::Tick                     per tick: interaction edges (door, lamp pick-up/place/toggle), player against the
-                                colliders, door (blocked leaves swing back), threat, lamp (swept)
+                                colliders, door (blocked leaves swing back), threat (path, or hunt states from the
+                                lamp state, distance, facing, line of sight), lamp (swept), objective phase and
+                                checkpoint, catch -> restart from the checkpoint, the world-state hash
+StateCheckLog::AfterTick        replay checks on the world state (objective, threat state, catches, player position)
 World::WriteRenderScene(alpha)  interpolated poses -> Scene::SetTransform only for entities whose pose changed
 audio::Director::Update         world snapshot (door/lamp/threat state, emitter states and transforms) -> loop and
                                 one-shot commands and text cues; AudioSystem::Update refreshes every voice's level and
@@ -112,6 +115,5 @@ that root and refused when they leave it.
 
 ## Not yet present
 
-DLSS reconstruction (deferred evaluation), the glTF/GLB subset (deferred), the objective and
-threat state machines with the catch and checkpoint restart (M5), the six-room level (M6).
-`docs/STATUS.md` names the next task.
+DLSS reconstruction (deferred evaluation), the glTF/GLB subset (deferred), waypoint routing for the
+machine (M6), the fuse route and the six-room level (M6). `docs/STATUS.md` names the next task.

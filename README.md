@@ -18,8 +18,13 @@ replays drives a first-person camera, a hinged door, a portable lamp fixture, an
 visible only in the mirror; the denoised mode reconstructs one sample per pixel with NVIDIA NRD
 REBLUR, describing the mirror's reflected surfaces to the denoiser (primary surface replacement),
 with measured motion vectors, an explicit history policy, a zero-lag trail test on the mirrored
-threat, frame-sequence captures, and a benchmark report. Scene files (M3.5) and the playable proof
-(M5) are next. Details, evidence labels, and the next task: [`docs/STATUS.md`](docs/STATUS.md).
+threat, frame-sequence captures, and a benchmark report. The level is a validated JSON scene file
+with a reload command (M3.5). The playable proof (M5) has collision, a placeholder body seen in the
+mirror, on-screen prompts, a pause menu with settings, a diagnostic panel, generated sound that
+follows the world state, a machine that patrols, chases, and catches on gameplay data alone, an
+objective with checkpoints and a restart, and replays that prove the rules do not depend on
+rendering; the performance re-measurement and the human play-through close it. Details, evidence
+labels, and the next task: [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Quick start
 

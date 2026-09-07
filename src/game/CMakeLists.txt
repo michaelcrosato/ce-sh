@@ -7,6 +7,8 @@ add_library(lc_game STATIC
     replay.h
     simulation.cpp
     simulation.h
+    state_checks.cpp
+    state_checks.h
     world.cpp
     world.h
 )

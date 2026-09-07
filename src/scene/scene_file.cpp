@@ -88,6 +88,9 @@ struct Document {
     float lampFaceOffset = 0.101f;
     std::string threatBody, threatHead, threatPath, threatParkAt;
     std::string mirrorObject, mirrorCheckCamera, mirrorAimAt, hallFloor;
+    // Objectives: the exit marker (M5). Other kinds are rejected until they exist.
+    std::string exitMarker;
+    float exitRadius = 0.8f;
 };
 
 class Reader {
@@ -642,11 +645,35 @@ void ParseEntities(Reader& r, const json::Value& root, Document& doc) {
             requireMarker(o.aim->target, ("object '" + o.id + "' aim.target").c_str());
         }
     }
+    // Objectives (spec §15, §16): one "exit" entry names the marker the player must reach with the
+    // lamp; the phases before it (lamp acquired, placed, retrieved) come from the lamp entity.
     const json::Value* objectives = root.Get("objectives");
     if (objectives == nullptr || !objectives->IsArray()) {
-        r.Error("objectives: missing array (empty until M5)");
-    } else if (objectives->Size() != 0) {
-        r.Error(std::format("objectives: {} event(s) given but objective events are not implemented (M5)", objectives->Size()));
+        r.Error("objectives: missing array");
+        return;
+    }
+    std::size_t exits = 0;
+    for (std::size_t i = 0; i < objectives->Size(); ++i) {
+        const json::Value& v = *objectives->At(i);
+        const std::string where = std::format("objectives[{}]", i);
+        if (!v.IsObject()) {
+            r.Error(where + ": must be an object");
+            continue;
+        }
+        std::string id;
+        std::string kind;
+        r.ReadString(v, where.c_str(), "id", id, true);
+        if (!r.ReadString(v, where.c_str(), "kind", kind, true)) continue;
+        if (kind != "exit") {
+            r.Error(std::format("{}: unknown kind '{}' (known: exit)", where, kind));
+            continue;
+        }
+        if (++exits > 1) {
+            r.Error(where + ": only one exit objective is allowed");
+            continue;
+        }
+        if (r.ReadString(v, where.c_str(), "marker", doc.exitMarker, true)) requireMarker(doc.exitMarker, (where + ".marker").c_str());
+        r.ReadNumber(v, where.c_str(), "radius", doc.exitRadius, false, 0.1f, 10.0f);
     }
 }
 
@@ -693,6 +720,11 @@ TwoRoomLevel BuildLevel(const Document& doc, std::string_view sourceName, std::u
     level.threatPath = path->points;
     level.threatSpeed = path->speed;
     level.threatCheckPosition = threatPark->position;
+    if (!doc.exitMarker.empty()) {
+        level.hasExit = true;
+        level.exitPosition = marker(doc.exitMarker)->position;
+        level.exitRadius = doc.exitRadius;
+    }
     level.mirrorCheckCamera = {checkCam->position, checkCam->hasYaw ? checkCam->yaw : 0.0f, 0.0f};
     level.playerStart = {start->position, start->hasYaw ? start->yaw : 0.0f, 0.0f};
     level.floorSocket = *startSocket;

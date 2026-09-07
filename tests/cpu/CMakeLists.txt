@@ -15,6 +15,7 @@ add_executable(lc_cpu_tests
     test_log.cpp
     test_material.cpp
     test_math.cpp
+    test_objective.cpp
     test_radiometry.cpp
     test_reconstruction.cpp
     test_replay_scripts.cpp

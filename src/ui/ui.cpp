@@ -198,7 +198,19 @@ void Ui::DrawOverlay(const Overlay& overlay) {
         ImGui::End();
         ImGui::PopStyleVar();
     }
-    if (overlay.introCard) {
+    if (overlay.endCard) {
+        if (BeginPinned("##end", ImVec2(size.x * 0.5f, size.y * 0.5f), ImVec2(0.5f, 0.5f), 0.85f)) {
+            ImGui::PushFont(nullptr, kTitleFontSize);
+            ImGui::TextUnformatted("YOU MADE IT OUT");
+            ImGui::PopFont();
+            ImGui::PushFont(nullptr, kBodyFontSize);
+            ImGui::TextDisabled("The lamp is yours and the door is behind you. That is the whole proof.");
+            ImGui::Spacing();
+            KeyLine("Esc", "Menu: restart the route or quit");
+            ImGui::PopFont();
+        }
+        ImGui::End();
+    } else if (overlay.introCard) {
         if (BeginPinned("##intro", ImVec2(size.x * 0.5f, size.y * 0.5f), ImVec2(0.5f, 0.5f), 0.85f)) {
             ImGui::PushFont(nullptr, kTitleFontSize);
             ImGui::TextUnformatted("LAST CIRCUIT");
@@ -299,6 +311,16 @@ void Ui::Render(ID3D12GraphicsCommandList* list, ID3D12Resource* backBuffer) {
     impl_->frameOpen = false;
     ImDrawData* drawData = ImGui::GetDrawData();
     if (drawData == nullptr || drawData->CmdListsCount == 0) return;
+    // Texture lifecycle events (the font atlas grows when new glyph sizes appear): logged for the records.
+    for (ImTextureData* tex : ImGui::GetPlatformIO().Textures) {
+        if (tex->Status == ImTextureStatus_WantCreate) {
+            log::Info("UI: font atlas texture {}x{} created (draw data: {} lists, {} vertices)", tex->Width, tex->Height, drawData->CmdListsCount, drawData->TotalVtxCount);
+        } else if (tex->Status == ImTextureStatus_WantUpdates) {
+            log::Debug("UI: font atlas update {}x{} at ({}, {})", tex->UpdateRect.w, tex->UpdateRect.h, tex->UpdateRect.x, tex->UpdateRect.y);
+        } else if (tex->Status == ImTextureStatus_WantDestroy && tex->UnusedFrames == 0) {
+            log::Info("UI: font atlas texture {}x{} retired", tex->Width, tex->Height);
+        }
+    }
 
     const D3D12_CPU_DESCRIPTOR_HANDLE rtv = impl_->rtvHeap->GetCPUDescriptorHandleForHeapStart();
     impl_->device->CreateRenderTargetView(backBuffer, nullptr, rtv);
