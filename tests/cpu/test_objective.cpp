@@ -213,6 +213,60 @@ LC_TEST(powered_circuit_fan_locked_door_and_pocketed_item_follow_the_fuse) {
     LC_CHECK(again.CircuitOn("b") && !other.CircuitOn("b"));
 }
 
+LC_TEST(a_pocketed_item_is_taken_with_the_lamp_in_hand_and_each_socket_takes_its_own_item) {
+    World w(LevelWithFuseFanAndLockedDoor(), ThreatBehaviour::Patrol);
+    const lc::game::Item* fuse = w.FindItem("fuse");
+    const lc::game::Item* lamp = w.FindItem("lamp");
+    LC_REQUIRE(fuse != nullptr && lamp != nullptr);
+    // The lamp in the hand first (the floor socket at the start pose), then the fuse straight ahead:
+    // the pocket does not need the hand, so the prompt still offers the fuse.
+    TakeLamp(w);
+    LC_CHECK(lamp->State() == lc::game::ItemState::Held);
+    const auto target = w.CurrentInteraction();
+    LC_REQUIRE(target.has_value());
+    LC_CHECK_EQ(target->name, std::string("fuse"));
+    Run(w, Interact(), 1);
+    LC_CHECK(fuse->State() == lc::game::ItemState::Held);
+    LC_CHECK(lamp->State() == lc::game::ItemState::Held);
+    // The pocketed fuse rides in the torso: its transform is written when the player moves and not
+    // otherwise (a rewrite would count as motion: a TLAS rebuild and a reset of the reference
+    // accumulation every frame).
+    LC_CHECK(w.WriteRenderScene(w.GetScene(), 1.0f));
+    LC_CHECK(!w.WriteRenderScene(w.GetScene(), 1.0f));
+    Run(w, Move(0.0f, 1.0f), 1);
+    LC_CHECK(w.WriteRenderScene(w.GetScene(), 1.0f));
+    LC_CHECK(!w.WriteRenderScene(w.GetScene(), 1.0f));
+    Run(w, Move(0.0f, -1.0f), 1);  // Back to the panel.
+    w.WriteRenderScene(w.GetScene(), 1.0f);
+    // With both carried, the exit panel ahead takes the fuse (the only held item it accepts) and the
+    // lamp stays in the hand; the empty floor socket (accepts the lamp) is behind the player.
+    const auto panel = w.CurrentInteraction();
+    LC_REQUIRE(panel.has_value());
+    LC_CHECK_EQ(panel->name, std::string("exit_panel"));
+    LC_CHECK_EQ(panel->text, std::string("Put the fuse in the exit panel"));
+    Run(w, Interact(), 1);
+    LC_CHECK(fuse->State() == lc::game::ItemState::Placed);
+    LC_CHECK(lamp->State() == lc::game::ItemState::Held);
+    LC_CHECK(w.CircuitOn("b"));
+    // The placed fuse is offered again with the lamp still in the hand: a pocket item never needs it.
+    const auto again = w.CurrentInteraction();
+    LC_REQUIRE(again.has_value());
+    LC_CHECK_EQ(again->name, std::string("fuse"));
+    LC_CHECK_EQ(again->text, std::string("Take the fuse"));
+    Run(w, Interact(), 1);  // the fuse back into the pocket
+    LC_CHECK(fuse->State() == lc::game::ItemState::Held);
+    // Each socket takes its own item: looking down at the empty floor socket (accepts the lamp) with
+    // both carried offers the lamp's placement, and only the lamp leaves the hand.
+    Run(w, Look(0.0f, -0.11f), 10);
+    const auto floor = w.CurrentInteraction();
+    LC_REQUIRE(floor.has_value());
+    LC_CHECK_EQ(floor->name, std::string("floor_a"));
+    LC_CHECK_EQ(floor->text, std::string("Place the lamp on the floor socket"));
+    Run(w, Interact(), 1);
+    LC_CHECK(lamp->State() == lc::game::ItemState::Placed);
+    LC_CHECK(fuse->State() == lc::game::ItemState::Held);
+}
+
 LC_TEST(replay_t15_route_completes_without_a_catch_and_is_deterministic) {
     SimulatedReplay a("t15_route.json");
     LC_CHECK(a.replay.hunt);

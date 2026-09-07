@@ -333,8 +333,12 @@ int Application::RunSimulateOnly() {
               world.GetLamp().State() == game::LampState::Held ? "held" : world.GetLamp().SocketName(), game::DoorStateName(world.GetDoor().State()),
               world.StateHash());
     std::printf("STATE HASH %016llx\n", static_cast<unsigned long long>(world.StateHash()));
-    int problems = static_cast<int>(checks.Failed() + checks.Pending());
-    if (checks.Pending() != 0) log::Error("{} state check(s) never reached their tick", checks.Pending());
+    // A run stopped early (--stop-at-tick) leaves the later checks unevaluated on purpose.
+    const std::size_t beyond = checks.PendingBeyond(simulation.Tick());
+    const std::size_t missed = checks.Pending() - beyond;
+    int problems = static_cast<int>(checks.Failed() + missed);
+    if (missed != 0) log::Error("{} state check(s) never reached their tick", missed);
+    if (beyond != 0) log::Info("{} state check(s) lie beyond the stop tick {} and were not evaluated", beyond, simulation.Tick());
     if (options_.expectStateHash) {
         const bool same = *options_.expectStateHash == world.StateHash();
         log::Info("state hash {:016x} expected {:016x} -> {}", world.StateHash(), *options_.expectStateHash, same ? "PASS" : "FAIL");
@@ -1517,11 +1521,15 @@ int Application::RunRender() {
                     }
                 }
 
-                // Replay checks at the stop tick.
+                // Replay image checks at the stop tick (the world-state checks have their own log
+                // and run right after their tick, whether or not it is the stop tick).
                 if (world && replay) {
                     const std::uint64_t tick = simulation.Tick();
                     int evaluated = 0;
+                    std::size_t imageChecks = 0;
                     for (const game::ReplayCheck& c : replay->checks) {
+                        if (game::IsStateCheck(c)) continue;
+                        ++imageChecks;
                         if (c.tick != tick) continue;
                         ++evaluated;
                         bool ok = false;
@@ -1669,7 +1677,7 @@ int Application::RunRender() {
                         log::Info("replay check tick {} '{}' ({}): {} -> {}", c.tick, c.description, c.kind, detail, ok ? "PASS" : "FAIL");
                         if (!ok) ++problems;
                     }
-                    log::Info("replay checks evaluated at tick {}: {} (others skipped: {})", tick, evaluated, replay->checks.size() - evaluated);
+                    log::Info("replay image checks evaluated at tick {}: {} (at other ticks, skipped: {})", tick, evaluated, imageChecks - static_cast<std::size_t>(evaluated));
                     if (!frozenReplay && motionFrames + 1 != renderer.TlasRebuildCount() && motionFrames != renderer.TlasRebuildCount()) {
                         log::Error("TLAS rebuilt {} times but the world changed transforms in {} frames", renderer.TlasRebuildCount(), motionFrames);
                         ++problems;
@@ -1679,8 +1687,13 @@ int Application::RunRender() {
                 // World-state checks (evaluated at their ticks) and the rule-invariance hash (T14).
                 if (stateChecks) {
                     for (const std::string& line : stateChecks->Lines()) log::Info("{}", line);
-                    if (stateChecks->Pending() != 0) log::Error("{} state check(s) never reached their tick", stateChecks->Pending());
-                    problems += static_cast<int>(stateChecks->Failed() + stateChecks->Pending());
+                    // A run stopped before the replay's end (--frames at an image check's tick) leaves the
+                    // later state checks unevaluated on purpose; only checks inside the run count as missed.
+                    const std::size_t beyond = stateChecks->PendingBeyond(simulation.Tick());
+                    const std::size_t missed = stateChecks->Pending() - beyond;
+                    if (missed != 0) log::Error("{} state check(s) never reached their tick", missed);
+                    if (beyond != 0) log::Info("{} state check(s) lie beyond the stop tick {} and were not evaluated", beyond, simulation.Tick());
+                    problems += static_cast<int>(stateChecks->Failed() + missed);
                 }
                 if (world && replay) {
                     log::Info("state hash {:016x} after {} ticks (objective {}, catches {}, restarts {})", world->StateHash(), simulation.Tick(),

@@ -348,8 +348,12 @@ private:
     void HashTick();
     void Event(std::string text);
     const SocketSpec* FindSocket(const std::string& name) const;
-    Item* HeldItem();
-    const Item* HeldItem() const;
+    // The item carried in the hand (a held item that does not hide when carried), if any.
+    Item* HandItem();
+    const Item* HandItem() const;
+    // The held item (hand or pocket) that the socket accepts, if any.
+    Item* HeldItemFor(const SocketSpec& socket);
+    const Item* HeldItemFor(const SocketSpec& socket) const;
     math::Mat4 ItemTransform(const Item& item, const PoseSpec& pose, const PlayerPose& player) const;
 
     TwoRoomLevel level_;
@@ -378,6 +382,7 @@ private:
     std::vector<float> lastDoorAngles_;
     std::vector<PoseSpec> lastItemPoses_;
     std::vector<bool> lastItemHidden_;
+    PoseSpec lastHiddenFeet_;  // The feet pose the pocketed items were last written for.
     std::vector<float> lastFanAngles_;
     PoseSpec lastThreatPose_;
     PoseSpec lastBodyPose_;

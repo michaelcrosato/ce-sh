@@ -26,6 +26,9 @@ public:
     std::size_t Evaluated() const { return evaluated_; }
     std::size_t Failed() const { return failed_; }
     std::size_t Pending() const { return total_ - evaluated_; }  // Checks whose tick was never reached.
+    // Checks whose tick lies beyond `tickCount`: a run stopped early on purpose (an image check's
+    // --frames) leaves them unevaluated without being at fault.
+    std::size_t PendingBeyond(std::uint64_t tickCount) const;
     const std::vector<std::string>& Lines() const { return lines_; }
 
 private:

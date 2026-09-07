@@ -585,18 +585,30 @@ const Item* World::FindItem(const std::string& id) const {
     return nullptr;
 }
 
-Item* World::HeldItem() {
+Item* World::HandItem() {
     for (Item& it : items_) {
-        if (it.State() == ItemState::Held) return &it;
+        if (it.State() == ItemState::Held && !it.HidesWhenCarried()) return &it;
     }
     return nullptr;
 }
 
-const Item* World::HeldItem() const {
+const Item* World::HandItem() const {
     for (const Item& it : items_) {
-        if (it.State() == ItemState::Held) return &it;
+        if (it.State() == ItemState::Held && !it.HidesWhenCarried()) return &it;
     }
     return nullptr;
+}
+
+const Item* World::HeldItemFor(const SocketSpec& socket) const {
+    for (const Item& it : items_) {
+        if (it.State() != ItemState::Held) continue;
+        if (std::find(socket.accepts.begin(), socket.accepts.end(), it.Id()) != socket.accepts.end()) return &it;
+    }
+    return nullptr;
+}
+
+Item* World::HeldItemFor(const SocketSpec& socket) {
+    return const_cast<Item*>(static_cast<const World*>(this)->HeldItemFor(socket));
 }
 
 bool World::CircuitOn(const std::string& id) const {
@@ -792,20 +804,21 @@ std::optional<InteractionTarget> World::CurrentInteraction() const {
         const bool opening = d.State() == DoorState::Closed || d.State() == DoorState::Closing;
         pick(consider(InteractionTarget::Kind::Door, d.Id(), opening ? "Open the door" : "Close the door", doorPoint, 2.0f));
     }
-    const Item* held = HeldItem();
+    // One item in the hand at a time; an item that hides when carried goes into a pocket instead and
+    // never needs the hand (the fuse is pulled while the lamp is carried).
+    const bool handFree = HandItem() == nullptr;
     for (const Item& it : items_) {
-        if (it.State() != ItemState::Placed || held != nullptr) continue;  // One item in hand at a time.
+        if (it.State() != ItemState::Placed || (!handFree && !it.HidesWhenCarried())) continue;
         pick(consider(InteractionTarget::Kind::Item, it.Id(), "Take the " + it.Text(), it.Current().position + Vec3{0.0f, 0.1f, 0.0f}, Item::kReach));
     }
-    if (held != nullptr) {
-        for (const SocketSpec& s : level_.sockets) {
-            if (std::find(s.accepts.begin(), s.accepts.end(), held->Id()) == s.accepts.end()) continue;
-            bool occupied = false;
-            for (const Item& it : items_) occupied = occupied || (it.State() == ItemState::Placed && it.SocketName() == s.name);
-            if (occupied) continue;
-            const std::string text = held->HasLight() ? "Place the " + held->Text() + " on the " + s.text : "Put the " + held->Text() + " in the " + s.text;
-            pick(consider(InteractionTarget::Kind::Socket, s.name, text, s.position, Item::kReach));
-        }
+    for (const SocketSpec& s : level_.sockets) {
+        const Item* held = HeldItemFor(s);
+        if (held == nullptr) continue;
+        bool occupied = false;
+        for (const Item& it : items_) occupied = occupied || (it.State() == ItemState::Placed && it.SocketName() == s.name);
+        if (occupied) continue;
+        const std::string text = held->HasLight() ? "Place the " + held->Text() + " on the " + s.text : "Put the " + held->Text() + " in the " + s.text;
+        pick(consider(InteractionTarget::Kind::Socket, s.name, text, s.position, Item::kReach));
     }
     return best;
 }
@@ -829,8 +842,8 @@ void World::Tick(const InputFrame& input, float dt) {
                         log::Debug("tick {}: {} picked up", ticks_, it.Id());
                     }
                 }
-            } else if (Item* held = HeldItem()) {
-                if (const SocketSpec* s = FindSocket(target->name)) {
+            } else if (const SocketSpec* s = FindSocket(target->name)) {
+                if (Item* held = HeldItemFor(*s)) {
                     held->Place(*s);
                     log::Debug("tick {}: {} placed on {}", ticks_, held->Id(), s->name);
                 }
@@ -893,11 +906,16 @@ bool World::WriteRenderScene(Scene& scene, float alpha) {
         }
     }
     const PlayerPose playerPose = player_.At(alpha);
+    const PoseSpec feet{playerPose.position, playerPose.yaw, 0.0f};
+    // A pocketed item rides in the torso: its transform follows the feet pose, so it is rewritten when
+    // the player moves, never every frame (a rewrite of an unchanged transform still counts as motion
+    // to the renderer: a TLAS rebuild and a history or accumulation reset).
+    const bool feetMoved = !wroteOnce_ || !SamePose(feet, lastHiddenFeet_);
     for (std::size_t i = 0; i < items_.size(); ++i) {
         const Item& it = items_[i];
         const PoseSpec pose = it.PoseAt(alpha);
         const bool hidden = it.State() == ItemState::Held && it.HidesWhenCarried();
-        if (!wroteOnce_ || !SamePose(pose, lastItemPoses_[i]) || hidden != lastItemHidden_[i] || hidden) {
+        if (!wroteOnce_ || !SamePose(pose, lastItemPoses_[i]) || hidden != lastItemHidden_[i] || (hidden && feetMoved)) {
             scene.SetTransform(level_.items[i].body, ItemTransform(it, pose, playerPose));
             if (it.HasLight()) scene.SetTransform(level_.items[i].face, LampFaceTransform(pose, it.FaceOffset()));
             lastItemPoses_[i] = pose;
@@ -905,6 +923,7 @@ bool World::WriteRenderScene(Scene& scene, float alpha) {
             changed = true;
         }
     }
+    lastHiddenFeet_ = feet;
     for (std::size_t i = 0; i < fans_.size(); ++i) {
         const float angle = fans_[i].AngleAt(alpha);
         if (!wroteOnce_ || angle != lastFanAngles_[i]) {
@@ -924,7 +943,6 @@ bool World::WriteRenderScene(Scene& scene, float alpha) {
         changed = true;
     }
     if (level_.playerTorso.value != 0) {
-        const PoseSpec feet{playerPose.position, playerPose.yaw, 0.0f};
         if (!wroteOnce_ || !SamePose(feet, lastBodyPose_)) {
             scene.SetTransform(level_.playerTorso, PlayerTorsoTransform(feet));
             scene.SetTransform(level_.playerHandLeft, PlayerHandTransform(feet, false));

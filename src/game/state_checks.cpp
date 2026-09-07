@@ -39,6 +39,14 @@ StateCheckLog::StateCheckLog(const Replay& replay) : replay_(replay) {
     }
 }
 
+std::size_t StateCheckLog::PendingBeyond(std::uint64_t tickCount) const {
+    std::size_t beyond = 0;
+    for (const ReplayCheck& c : replay_.checks) {
+        if (IsStateCheck(c) && c.tick > tickCount) ++beyond;
+    }
+    return beyond;
+}
+
 void StateCheckLog::AfterTick(const World& world, std::uint64_t tickCount) {
     for (const ReplayCheck& c : replay_.checks) {
         if (!IsStateCheck(c) || c.tick != tickCount) continue;

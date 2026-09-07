@@ -77,6 +77,33 @@ set_tests_properties(sim_t15_route_cpu_only sim_t15_catch_restart_cpu_only PROPE
 # M6: the six-room level's static check (the inspection mirror shows the machine parked in Hall A through
 # the open inspection door, lit by the hall fixture) and the scene file's own validation.
 add_test(NAME gpu_six_room_static_mirror COMMAND LastCircuit --scene six_room --mode reference --spp 32 --validate --headless)
+# M6: T16 on the six-room demo. The encounter replay (99 s, hunt: the lamp route, the mirror check, the
+# fuse pulled in the Switch room, the dark return behind the machine, the exit powered) and its caught
+# variant (leaving the Switch room early into the machine coming south, the restart from the
+# fuse_carried checkpoint, completion). The world-state hashes come from `--simulate-only` (Debug and
+# Release agree); T14's rendering variants and T15's rendered catch must reproduce them. The image
+# checks of the replays (the mirror, the fan's blades running and stopped, the fused fixture and its
+# floor, the emergency light, the exit door closed then open, the lit vestibule) run at their ticks:
+# the world advances on the CPU, then one 64 spp reference render is checked.
+set(LC_T16_ENCOUNTER_HASH 797e827499be64cf)
+set(LC_T16_CAUGHT_HASH e72a6407b234f9b3)
+set(_lc_t16 "${_lc_replay}/t16_encounter.json")
+set(_lc_t16c "${_lc_replay}/t16_caught.json")
+add_test(NAME sim_t16_encounter_cpu_only COMMAND LastCircuit --scene six_room --replay "${_lc_t16}" --simulate-only --validate --expect-state-hash ${LC_T16_ENCOUNTER_HASH})
+add_test(NAME sim_t16_caught_cpu_only COMMAND LastCircuit --scene six_room --replay "${_lc_t16c}" --simulate-only --validate --expect-state-hash ${LC_T16_CAUGHT_HASH})
+add_test(NAME gpu_t16_rules_raw COMMAND LastCircuit --scene six_room --replay "${_lc_t16}" --mode raw --frames 5961 --validate --headless --expect-state-hash ${LC_T16_ENCOUNTER_HASH})
+add_test(NAME gpu_t16_rules_denoised COMMAND LastCircuit --scene six_room --replay "${_lc_t16}" --mode denoised --frames 5961 --validate --headless --expect-state-hash ${LC_T16_ENCOUNTER_HASH})
+add_test(NAME gpu_t16_rules_exposure COMMAND LastCircuit --scene six_room --replay "${_lc_t16}" --mode denoised --exposure 0.25 --frames 5961 --validate --headless --expect-state-hash ${LC_T16_ENCOUNTER_HASH})
+add_test(NAME gpu_t16_rules_internal_size COMMAND LastCircuit --scene six_room --replay "${_lc_t16}" --mode denoised --internal 960x540 --frames 5961 --validate --headless --expect-state-hash ${LC_T16_ENCOUNTER_HASH})
+add_test(NAME gpu_t16_caught_restart_denoised COMMAND LastCircuit --scene six_room --replay "${_lc_t16c}" --mode denoised --frames 7084 --validate --headless --expect-state-hash ${LC_T16_CAUGHT_HASH})
+set(_lc_t16_image_tests)
+foreach(_tick 421 1945 2700 2715 4014 4373 5527 5729 5879)
+    add_test(NAME gpu_t16_image_tick${_tick} COMMAND LastCircuit --scene six_room --replay "${_lc_t16}" --stop-at-tick ${_tick} --mode reference --spp 64 --validate --headless)
+    list(APPEND _lc_t16_image_tests gpu_t16_image_tick${_tick})
+endforeach()
+# After the restart: the exit door open and the vestibule lit at the caught variant's shifted tick.
+add_test(NAME gpu_t16_caught_image_tick7002 COMMAND LastCircuit --scene six_room --replay "${_lc_t16c}" --stop-at-tick 7002 --mode reference --spp 64 --validate --headless)
+set_tests_properties(sim_t16_encounter_cpu_only sim_t16_caught_cpu_only PROPERTIES LABELS cpu)
 # Benchmark command (spec §21): a short headless run must produce a complete report.
 add_test(NAME gpu_benchmark_smoke COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_mirror_motion.json" --mode denoised
          --benchmark-seconds 2 --warmup-seconds 0.5 --report "${CMAKE_BINARY_DIR}/artifacts/benchmark_smoke.json" --headless)
@@ -108,6 +135,8 @@ set(_lc_gpu_tests
     gpu_benchmark_smoke gpu_scene_reload_test gpu_scene_file_option gpu_t13_player_in_reflection
     gpu_t14_rules_raw gpu_t14_rules_denoised gpu_t14_rules_exposure gpu_t14_rules_internal_size gpu_t15_catch_restart_denoised
     gpu_six_room_static_mirror
+    gpu_t16_rules_raw gpu_t16_rules_denoised gpu_t16_rules_exposure gpu_t16_rules_internal_size gpu_t16_caught_restart_denoised
+    ${_lc_t16_image_tests} gpu_t16_caught_image_tick7002
     gpu_t08_box_strategies_agree gpu_t07_agrees_with_higher_sample_reference gpu_t08_box_depth_truncation_report)
 set_tests_properties(${_lc_gpu_tests} PROPERTIES SKIP_RETURN_CODE 3 LABELS gpu TIMEOUT 900)
 set_tests_properties(gpu_resize_test gpu_denoised_resize_test gpu_denoised_scaled_resize_test PROPERTIES LABELS "gpu;window" RUN_SERIAL TRUE)
