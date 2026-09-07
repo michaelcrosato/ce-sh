@@ -208,7 +208,7 @@ void Ui::DrawOverlay(const Overlay& overlay) {
             ImGui::TextUnformatted("YOU MADE IT OUT");
             ImGui::PopFont();
             ImGui::PushFont(nullptr, kBodyFontSize);
-            ImGui::TextDisabled("The lamp is yours and the door is behind you. That is the whole proof.");
+            ImGui::TextDisabled("The lamp is yours and the door is behind you.");
             ImGui::Spacing();
             KeyLine("Esc", "Menu: restart the route or quit");
             ImGui::PopFont();

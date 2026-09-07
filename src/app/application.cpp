@@ -648,6 +648,7 @@ int Application::RunRender() {
         double cpuAccumMs = 0.0;
         std::uint32_t cpuAccumFrames = 0;
         auto lastReport = std::chrono::steady_clock::now();
+        auto lastMemorySample = lastReport;
         auto lastFrameTime = std::chrono::steady_clock::now();
         Camera camera = world ? world->CameraAt(1.0f) : staticDesc->camera;
         camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
@@ -1191,6 +1192,21 @@ int Application::RunRender() {
                 cpuAccumMs = 0.0;
                 cpuAccumFrames = 0;
                 lastReport = now;
+            }
+            // The memory trend of long runs (spec §19 reliability target): one line a minute.
+            if (now - lastMemorySample >= std::chrono::seconds(60)) {
+                device->UpdateVideoMemoryInfo();
+                PROCESS_MEMORY_COUNTERS pmc{};
+                pmc.cb = sizeof(pmc);
+                if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+                    constexpr double kMiB = 1024.0 * 1024.0;
+                    log::Info("memory at {:.0f} s: working set {:.1f} MiB (peak {:.1f}), video {:.1f} MiB of {:.0f} MiB budget, denoiser pool {:.1f} MiB, "
+                              "history resets {}, frame {}",
+                              Clock::SecondsSinceStart(), static_cast<double>(pmc.WorkingSetSize) / kMiB, static_cast<double>(pmc.PeakWorkingSetSize) / kMiB,
+                              static_cast<double>(device->Caps().videoMemoryCurrentUsage) / kMiB, static_cast<double>(device->Caps().videoMemoryBudget) / kMiB,
+                              static_cast<double>(renderer.DenoiserPoolBytes()) / kMiB, renderer.HistoryResetCount(), frameIndex);
+                }
+                lastMemorySample = now;
             }
 
             if (options_.resizeTest && window) {

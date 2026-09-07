@@ -44,8 +44,26 @@ Milestone:            M0 PASSED, M1 PASSED, M2 PASSED, M3 PASSED,
                       the targets with a large margin (table below). The M6 gate reads "the complete encounter
                       meets the test matrix": every automated row does; T12's review by a person, the
                       play-through, and listening are NOT RUN, so the gate as a whole is NOT RUN.
+                      M7 built; the package exists and its automated evidence PASSED; the gate NOT RUN. The
+                      package (dist\LastCircuit-0.1.0-9d04601c6110-win64, 4.7 MB in 17 files; the zip 2.5 MB
+                      with its SHA-256) is the executable with the static CRT (no redistributable; its imports
+                      are the in-box ADVAPI32, D3DCOMPILER_47, USER32, d3d12, dxgi, KERNEL32, GDI32, SHELL32,
+                      IMM32), the shaders and assets, the two demo replays, the generated NOTICES.txt with the
+                      NVIDIA attribution and every shipped license verbatim, README.txt, KNOWN_ISSUES.md, the
+                      smoke-test and benchmark commands, and a manifest with per-file SHA-256. A double-click
+                      starts the demo in play; settings and the seven rebindable actions persist in the user's
+                      data directory; startup failures explain themselves in a message box with the log path;
+                      the pause menu states the brightness range, the rendering path and what this build does
+                      not offer, the build id, and the notices. The M7 gate reads "a clean-machine test
+                      passes; the owner has actual gameplay capture, measured performance, and an accurate
+                      known-issues list": no clean machine was available (T18 NOT RUN, KI-036; the substitutes
+                      are the import check and the package's smoke test run from outside the build tree under
+                      CTest), the gameplay capture is the fixed encounter replay as presented with the
+                      interface (twelve frames, not a person's play), the performance is measured (the M6
+                      protocol runs and the package's own benchmark command), and the known-issues list is
+                      current. The gate as a whole is therefore NOT RUN.
 Build or commit:      branch m0-m1-bootstrap; see git log for the exact commit.
-                      Presets windows-debug and windows-release both configured, built, and tested (72 tests each).
+                      Presets windows-debug and windows-release both configured, built, and tested (73 tests each).
 Environment:          Windows 11 Home 10.0.26200.9278 (25H2); Intel Core i7-14700F, 31.8 GiB RAM;
                       Visual Studio Community 2026 18.9.12120.119, MSVC 14.51.36231 (cl 19.51.36256);
                       CMake 4.3.1-msvc1 (VS-bundled); Windows SDK 10.0.26100.0; DXC 1.8.2502.11 + dxil.dll;
@@ -104,17 +122,40 @@ Implemented in this session:
                       encounter and caught replays with world-state and image checks, image checks frozen at
                       their ticks with truncated runs that report the later state checks as not evaluated,
                       pocket items, the fan loop, tests/scripts/bench_m6.ps1.
+                      M7: the static CRT in both presets with C enabled (miniaudio's file had taken MSBuild's
+                      default runtime: the LNK4098 warning since M5), --version, the §21 scene names
+                      (last_circuit, mirror_lab), a launch without arguments as the game, the console of a
+                      double-click freed with the standard streams redirected, the default play log in
+                      %LOCALAPPDATA%\LastCircuit\logs, the startup message box with the log's last error,
+                      game::Settings with the key bindings in a JSON file that only play reads (clamped
+                      ranges, problems logged), --settings, the pause menu's Controls (press-a-key
+                      rebinding, conflicts, reset), About (build id, notices), the stated brightness range and
+                      rendering path, interface scale, the prompts and the controls card with the bound keys,
+                      tools/package.ps1 with the import check and the zip, tools/package/{smoke_test.cmd,
+                      benchmark.cmd, README.txt}, package_smoke under CTest, --capture-backbuffer as a list,
+                      windowed replays drawing the interface, tools/capture_gameplay.ps1.
 Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean (ImGui and miniaudio at /W3, no warnings); 6
                       shaders (cs_6_5, HLSL 2021, -WX -Zpr) plus NRD's 31 DXIL blobs through ShaderMake with the
                       same DXC.
-                      CPU TESTED: lc_cpu_tests 103/103 PASSED (both presets): + scene-file golden load, rejection
+                      CPU TESTED: lc_cpu_tests 110/110 PASSED (both presets); M7: --version, the scene aliases,
+                      the launch arguments, --no-dialog and --settings, the settings file (round trip,
+                      clamping, defaults on a broken file, key names, bindable keys, conflicts, the input
+                      mapping through the bindings), the log's last error. Earlier: + scene-file golden load, rejection
                       of every rule, limits and containment (3 cases); collision (6 cases); sound rules (7 cases);
                       objective, hunt, detection, state hash, state checks, the t15 replays (7 cases); M6: schema
                       2 goldens and rejections, the fan build, the fuse/fan/locked-door proof, pocket items and
                       their write rule, the fan loop, the six-room level (enclosure, door swings, budgets,
                       routing around the corner, the mirror through the CPU caster, sockets and markers).
-                      GPU EXECUTED + PASSED (both presets), 67 GPU tests + 4 CPU-only replay runs (ctest 72/72;
-                      Debug 174 s, Release 140 s):
+                      GPU EXECUTED + PASSED (both presets), 67 GPU tests + 4 CPU-only replay runs + the package
+                      smoke test (ctest 73/73; Debug 186 s, Release 152 s, with the static CRT):
+                        M7: package_smoke assembles the package of the configuration, checks the executable's
+                          imports, and runs the package's smoke test from its directory (adapters and the
+                          environment report; the T01 diagnostic validation; 600 reconstructed frames of the
+                          encounter with the layout probe; a ten-second benchmark report: 16 s per
+                          configuration). The startup dialog, the console release, the default log, the
+                          menu's Controls and About sections, a rebinding of Interact to T through the menu,
+                          the prompt showing [T], and the same binding after a restart from the saved file
+                          were exercised in windowed runs driven by posted messages (artifacts/m7).
                         M6: the static six-room mirror (the machine parked in Hall A seen through the open
                           inspection door after one bounce, 2e-4); T14 on the encounter (raw, denoised,
                           exposure 0.25, 960x540 internal: the CPU-only hash 797e827499be64cf reproduced bit for
@@ -145,8 +186,21 @@ Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean (ImGui and mini
                         D3D12 debug layer: 0 errors, 0 warnings in every Debug run; invalid-value counters 0.
 GPU and driver used:  NVIDIA GeForce RTX 4070 SUPER, vendor 0x10DE device 0x2783 rev 161, 11997 MiB,
                       driver 32.0.16.1047 (NVIDIA 610.47, 2026-05-18); DXR Tier 1.2, SM 6.8, root signature 1.1.
-Image evidence:       IMAGE CHECKED (artifacts/m4, artifacts/m5/ui, and artifacts/m6, regenerate with
-                      docs/BUILD.md and docs/TESTS.md; not committed).
+Image evidence:       IMAGE CHECKED (artifacts/m4, artifacts/m5/ui, artifacts/m6, and artifacts/m7, regenerate
+                      with docs/BUILD.md and docs/TESTS.md; not committed).
+                      M7 (artifacts/m7): the startup dialog for a bad level name (the log's last error and
+                      the log path in the box); the pause menu's Settings section with the brightness note
+                      and the rendering line, the Controls section before and after binding Interact to T
+                      ("press a key..." while waiting), the About section (build id, the NVIDIA attribution,
+                      the component list, the notices and settings paths), the Controls section after a
+                      restart from the saved file (still T), and the prompt "[T] Open the door". Gameplay
+                      capture (artifacts/m7/gameplay, tools/capture_gameplay.ps1): twelve presented
+                      1920x1080 frames of the encounter replay with the interface: the security door prompt,
+                      Hall A, the lamp prompt, the mirror pose, the machine in the mirror, the Plant door,
+                      the running fan, the fuse pulled, the wait in the dark Switch room, the dark return
+                      behind the machine's silhouette under the emergency glow with "[F] Switch the lamp on",
+                      the exit panel, and the vestibule with the end card. This is the fixed replay as
+                      presented by the program, not a person's play.
                       M6 (artifacts/m6/encounter, the nine reference renders of the encounter's image-check
                       ticks with their logs; artifacts/m6/six_room_static): tick 1945 shows the dark inspection
                       room with the mirror framing the lit doorway and the machine's silhouette (head above
@@ -188,9 +242,21 @@ Performance evidence: PERFORMANCE CHECKED with the §17 protocol on the complete
                       33.3 ms or 50 ms; working set 292-295 MB (peak 298), video memory in use 345 MB (budget
                       11.0 GiB). The pass criterion (p95 <= 16.67 ms, p99 <= 22 ms) holds with a wide margin;
                       the benchmark runs one simulation tick per rendered frame uncapped, so each 180-second
-                      window covers the 99 s encounter 15-16 times (the report records the loops). Earlier
-                      tables (M4, M5) below for the proof.
-Failed checks:        None outstanding. During M6: the first hand rule ("one held item") refused the fuse while
+                      window covers the 99 s encounter 15-16 times (the report records the loops). The
+                      packaged build (M7) measured once from its own benchmark command: GPU p95 2.40 / p99
+                      2.52 ms, working set 308 MB (below the M6 table). Earlier tables (M4, M5) below for the
+                      proof.
+Failed checks:        None outstanding. During M7: the LNK4098 warning's source was miniaudio's C file compiled
+                      without CMake's runtime flags (C was not an enabled language); the first console
+                      release doubled every log line (the log file reused the freed console's handle value
+                      through the C runtime's stderr; the streams now point at NUL); the first rebinding
+                      never saw the key (the frame's input clear ran before the menu; moved after it) and
+                      a second attempt missed the button (the brightness note's wrap shifted the layout);
+                      the package's smoke test could not run its executable from a PowerShell-started cmd
+                      (full paths now) and CTest's PowerShell lacked Get-FileHash (hashing and zipping
+                      through .NET now); the end card's capture frame was one frame early (ImGui sizes a
+                      new window on its first frame).
+                      During M6: the first hand rule ("one held item") refused the fuse while
                       the lamp was carried, so the encounter stalled at the fuse box (D-051: pocket items). The
                       first frozen reference render after the fuse pull never converged: the pocketed fuse's
                       transform was rewritten every frame and counted as motion (a TLAS rebuild and an
@@ -219,8 +285,10 @@ Failed checks:        None outstanding. During M6: the first hand rule ("one hel
                       internal size instead of the presented size.
 Checks not run and reasons:
                       T11 offset sweeps; T17 (the 30-minute reliability loop, repeated resize and focus
-                      sequences beyond the resize tests, the live-object report under a debugger); T18
-                      (packaging, M7). DLSS/Streamline: NOT RUN (deferred). History confidence inputs: not
+                      sequences beyond the resize tests, the live-object report under a debugger); T18 on a
+                      clean machine (none available: no second machine, virtual machine, or Windows Sandbox
+                      on Windows 11 Home; the import check and the package's smoke test from outside the
+                      build tree are the substitutes, KI-036). DLSS/Streamline: NOT RUN (deferred). History confidence inputs: not
                       provided (KI-019). Second RTX device: only one GPU present. T12 review by a person at
                       normal playback speed: NOT RUN (the automated lag metric, the frame sequences, and the
                       overlays are the evidence). The menu's mouse path was driven by posted messages, not a
@@ -234,13 +302,14 @@ Changed assumptions:  NRD's license is NVIDIA's proprietary RTX SDK license (att
                       recorded for the owner's review. The denoiser's spatial filter biases sharp lighting gradients
                       by a few percent (KI-018); the raw mean stays exact. Mirror planes are static for the PSR
                       motion (KI-020).
-Next concrete task:   M7 (spec §20): the package that a clean machine runs without a developer SDK, asset
-                      download, or API credential (T18): decide the CRT (KI-034) and the redistributable, a
-                      packaging script with the executable, shaders, assets, licenses, and the environment
-                      report, the loading phase before the first frame (KI-022), the tone curve (KI-008,
-                      KI-016), the reliability loop and resize/focus sequences (T17), and the human items of
-                      the M5/M6 gates when a person is available. Open budgets: the reusable-mesh count
-                      (KI-029).
+Next concrete task:   T17 (spec §19 reliability target): the 30-minute loop of gameplay, restart, source
+                      switching, and camera motion (the caught replay under the benchmark loop) with the
+                      memory trend sampled through the run, and a separate sequence of repeated resize and
+                      focus changes; then the human items (the play-throughs of the proof and the demo,
+                      listening, the T12 review, a clean-machine run of the package) when a person and a
+                      second machine are available. Deferred engineering: the loading phase before the
+                      first frame (KI-022), the tone curve (KI-008, KI-016), the reusable-mesh budget
+                      (KI-029), DLSS through Streamline (KI-021), the glTF/GLB subset.
 ```
 
 ## Benchmark table (M4, two-room proof)
@@ -322,3 +391,9 @@ working, 6 GiB video) by a factor of 25 and 17. This is one GPU (RTX 4070 SUPER)
 RTX 4060 test target; the target device was not measured (KI-006). The first run's p95 (2.37 ms)
 against the third's (2.09) is the run-to-run spread also seen in M4 and M5; nothing in the logs
 shows a stall.
+
+The packaged build (M7, `dist\LastCircuit-0.1.0-9d04601c6110-win64\benchmark.cmd`, the same
+protocol run once from the package directory): 92764 frames in 180 s (15 loops), GPU average 1.91 /
+median 1.81 / p95 2.40 / p99 2.52 / max 2.96 ms, CPU p95 2.38 ms, no frame above 33.3 ms, working
+set 308 MB, video memory 345 MB; the command prints the criterion as met. The package's own
+report (`benchmark\benchmark_20260907-041206.json`) carries the build hash 9d04601c6110.
