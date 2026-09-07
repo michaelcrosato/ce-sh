@@ -133,6 +133,10 @@ boundary (an invalid file is reported line by line and the running scene stays);
 `--reload-test` with `--replay` or `--play` does one reload at frame 2 headlessly and verifies it.
 Captures and benchmark reports record the file and its content hash.
 
+`tests/scripts/bench_m5.ps1` runs the M5 performance protocol (four 60-second Release runs of the
+route, catch, and mirror replays, vsync off, 1920x1080 window from a 1280x720 internal image, sound
+on, no interface) into `artifacts/m5/benchmark_release_*.json` and prints one summary line per run.
+
 `--capture-backbuffer <frame>` (windowed, with `--capture <dir>`) writes the presented back buffer
 of that frame, interface included, as `backbuffer_frame<N>.png` plus its alpha channel as
 `backbuffer_frame<N>_alpha.png`, and logs how many pixels have alpha below 255 (the evidence

@@ -12,16 +12,20 @@ Milestone:            M0 PASSED, M1 PASSED, M2 PASSED, M3 PASSED,
                       schema 1) with complete validation, limits, and asset-root containment; reload at a frame
                       boundary that never replaces a working scene with a broken one; content hashes in captures and
                       reports; the diagnostic panel is deferred to M5 (KI-017).
-                      M5 in progress (Tasks 1-5 of 6 PASSED): collision (capsule against the kit boxes, lamp
-                      sweep, a door that never traps the player), the placeholder body visible in the mirror and
-                      clear of the camera by placement, the interface (prompts, objective line, controls card,
-                      pause menu with settings, F1 diagnostic panel, reload from the menu), sound (generated
-                      clips with provenance, attenuation, pan, occlusion, state-following hums and events, text
-                      cues, volumes), and the game rules (the machine's patrol/chase/investigate/wait/return on
-                      gameplay data, the objective phases with checkpoints, the catch that restarts from the
-                      checkpoint, the menu restart, T14 rule invariance through a CPU-only state hash, T15
-                      route and catch replays) are built, tested, and checked; the records and the human
-                      play-through (Task 6) remain.
+                      M5 built; every automated check PASSED; the gate's own condition NOT RUN by a person.
+                      Collision (capsule against the kit boxes, lamp sweep, a door that never traps the player),
+                      the placeholder body visible in the mirror and clear of the camera by placement, the
+                      interface (prompts, objective line, controls card, pause menu with settings, F1 diagnostic
+                      panel, reload from the menu), sound (generated clips with provenance, attenuation, pan,
+                      occlusion, state-following hums and events, text cues, volumes), and the game rules (the
+                      machine's patrol/chase/investigate/wait/return on gameplay data, the objective phases with
+                      checkpoints, the catch that restarts from the checkpoint, the menu restart, T14 rule
+                      invariance through a CPU-only state hash, T15 route and catch replays) are built, tested,
+                      and checked, and the image and performance gates stay passed with the M5 content (table
+                      below). The M5 gate reads "a person can play the proof without console commands or a
+                      developer explaining each control": no person has played it in this record, so the gate
+                      is NOT RUN, not PASSED; the controls card, prompts, menu, and restart exist for that
+                      session, and the replays plus the scripted window runs are the evidence until then.
 Build or commit:      branch m0-m1-bootstrap; see git log for the exact commit.
                       Presets windows-debug and windows-release both configured, built, and tested (54 tests each).
 Environment:          Windows 11 Home 10.0.26200.9278 (25H2); Intel Core i7-14700F, 31.8 GiB RAM;
@@ -127,8 +131,12 @@ Image evidence:       IMAGE CHECKED (artifacts/m4 and artifacts/m5/ui, regenerat
                       the silhouette crossing and leaving with crisp edges and no ghost (event log beside it); the
                       door edge and the carried lamp sequences likewise.
 Performance evidence: PERFORMANCE CHECKED, instrumentation and the §17 protocol on the two-room proof (not the full
-                      encounter): see the benchmark table below. Frame-time distributions come from --benchmark-seconds
-                      reports (Release, vsync off, windowed 1920x1080 output, 1280x720 internal, denoised mode).
+                      encounter): see the benchmark tables below (M4, and M5 with the body, the hunting machine,
+                      sound on, interface off). Frame-time distributions come from --benchmark-seconds reports
+                      (Release, vsync off, windowed 1920x1080 output, 1280x720 internal, denoised mode). With the
+                      M5 content the GPU frame averages 1.8 ms with p99 at 2.0-2.3 ms and no frame above 33.3 ms
+                      in four 60-second runs; the working set grew from about 180 MB to about 300 MB (clips, the
+                      audio engine, the interface); video memory in use 345 MB.
 Failed checks:        None outstanding. During M5: the first body placement (torso 5 cm in front of the eye) hid
                       the T06 floor patch a metre ahead and the door-open check fell from 0.0196 to 0.0048 (below
                       its 0.005 minimum); fixed by moving the body behind the eye axis (D-039), not the threshold.
@@ -151,15 +159,18 @@ Checks not run and reasons:
                       30-minute reliability loop, live-object report under a debugger: NOT RUN. T12 review by a
                       person at normal playback speed: NOT RUN (the automated lag metric, the frame sequences, and
                       the overlays are the evidence). The menu's mouse path was driven by posted messages, not a
-                      person's hand; the human play-through is Task 6.
+                      person's hand. The M5 gate play-through by a person (spec §20): NOT RUN; listening to the
+                      sound: NOT RUN. Both need the owner or a tester at the keyboard with headphones; the command
+                      is `LastCircuit.exe --scene two_room --play --mode denoised --exposure 4`.
 Changed assumptions:  NRD's license is NVIDIA's proprietary RTX SDK license (attribution required; not open source):
                       recorded for the owner's review. The denoiser's spatial filter biases sharp lighting gradients
                       by a few percent (KI-018); the raw mean stays exact. Mirror planes are static for the PSR
                       motion (KI-020).
-Next concrete task:   M5 Task 6 of docs/superpowers/plans/2026-09-06-m5-playable-proof.md: performance
-                      re-measured with the M5 content (body, sound on, interface off) against the §17
-                      criterion, the human play-through recorded honestly (PASSED only if a person played it),
-                      and the M5 gate decision; then M6 (the six-room layout, fuse route, circuit changes).
+Next concrete task:   M6, the six-room demo (spec §4 room table, §20): write the plan (layout from the shared kit
+                      as a schema-1 scene file, the fuse as the objective's second carried object with its
+                      circuit change, the return sequence in the dark, the exit onto a lit space, waypoint routing
+                      for the machine, the 180-second full-encounter replay for T16), then build it room by
+                      room with the same evidence discipline. The M5 gate's play-through waits for a person.
 ```
 
 ## Benchmark table (M4, two-room proof)
@@ -180,11 +191,33 @@ submit, present), GPU is the `frame_gpu` timestamp pair.
 | t12_mirror_motion, raw mode (no denoiser) | 1 | 37243 (30 s) | 0.78 / 1.41 / 1.64 / 2.02 | 0.80 / 1.41 / 1.62 / 2.22 | 0 | denoising costs ~1.2 ms per frame |
 | t12_mirror_motion, native 1920x1080 internal | 1 | 6667 (30 s) | 4.47 / 5.04 / 5.26 / 5.99 | 4.50 / 5.09 / 5.33 / 6.82 | 0 | 2.25x the pixels, 2.2x the time |
 
+## Benchmark table (M5, playable proof content)
+
+Filled from `artifacts/m5/benchmark_release_*.json` (`tests/scripts/bench_m5.ps1`: Release at
+commit d6596bb, `--vsync off`, windowed 1920x1080 with `--internal 1280x720`, denoised mode, 4
+hits, 30-frame history, 5 s warm-up excluded, 60 s measured, sound on through the HDMI output,
+no interface, the replay looped with a world reset). The route and catch replays run the machine's
+hunt behaviour, the placeholder body, the collision solids, and the objective; the mirror replay is
+the M4 comparison run.
+
+| Replay | Frames (60 s) | Loops | GPU avg / p95 / p99 / max (ms) | CPU avg / p95 / p99 / max (ms) | GPU > 33.3 ms | Working set / VRAM |
+|---|---|---|---|---|---|---|
+| t15_route (hunt), run 1 | 32162 | 23 | 1.84 / 2.11 / 2.30 / 2.73 | 1.86 / 2.14 / 2.39 / 3.55 | 0 | 309 MB / 345 MB |
+| t15_route (hunt), run 2 | 32397 | 23 | 1.83 / 1.96 / 2.00 / 2.59 | 1.85 / 2.02 / 2.15 / 3.03 | 0 | 293 MB / 345 MB |
+| t15_catch_restart (hunt, a catch and a checkpoint restart per loop) | 32283 | 20 | 1.83 / 1.96 / 2.01 / 2.55 | 1.86 / 2.04 / 2.18 / 2.69 | 0 | 312 MB / 345 MB |
+| t12_mirror_motion (patrol; the M4 comparison) | 33108 | 38 | 1.79 / 1.86 / 1.91 / 2.45 | 1.81 / 1.97 / 2.13 / 2.71 | 0 | 296 MB / 345 MB |
+
+GPU pass averages over the runs: path_trace 0.62-0.64 ms, denoise 0.83-0.84 ms, compose 0.24-0.25 ms,
+upscale 0.03 ms, scene_update 0.06 ms, copy_out 0.02 ms; denoiser pool 66 MB. The mirror replay
+measures 1.79 ms against 2.00-2.05 ms in the M4 table for the same replay; the cause was not
+isolated (same GPU and driver; the M4 runs predate the scene-file loader, the collision solids, and
+the body) and the difference is inside the run-to-run spread already seen in M4.
+
 Reading: the two-room proof, reconstructed, uses about 2 ms of the 16.67 ms frame period on this
 GPU (spec §17 planning allocation 13 ms); the 95th and 99th percentiles are within 3.3 ms. The
 proof is far smaller than the six-room encounter, so these are not the product's numbers: the
-§17 pass criterion (p95 <= 16.67 ms, p99 <= 22 ms) is checked again with the M5/M6 content on the
-180-second replay. Process working set about 180 MB, video memory in use about 300 MB
+§17 pass criterion (p95 <= 16.67 ms, p99 <= 22 ms) is checked again with the M6 content on the
+180-second replay. M4 process working set about 180 MB, video memory in use about 300 MB
 (`artifacts/m4/benchmark_release_*.json`). The Debug build with the debug layer on measures the
 same GPU time (its `-Od` shaders do not dominate a RayQuery-bound frame). An earlier set of
 mirror-replay runs was invalid: the benchmark loop then still executed the trail-lag test's

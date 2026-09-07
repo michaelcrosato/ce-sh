@@ -163,6 +163,9 @@ Cross-run comparisons via `tests/scripts/compare_runs.ps1` (patch means per chan
 | `gpu_t14_rules_raw` / `_denoised` / `_exposure` / `_internal_size` | `--replay t15_route.json --frames 1481 --validate --headless --expect-state-hash <route hash>` with `--mode raw`, `--mode denoised`, `--mode denoised --exposure 0.25`, `--mode denoised --internal 960x540` | T14: the same replay rendered four different ways runs the same world-state checks and reproduces the CPU-only hash bit for bit (the hash covers every tick's objective phase, threat state and pose, player pose, lamp, door, catches) |
 | `gpu_t15_catch_restart_denoised` | `--replay t15_catch_restart.json --mode denoised --frames 1691 --validate --headless --expect-state-hash <catch hash>` | T15 under the production renderer: the catch, the checkpoint restart (a history reset), and the completion, with the CPU-only hash |
 
+Performance with this content (spec §17 protocol, `tests/scripts/bench_m5.ps1`): the M5 benchmark
+table in `docs/STATUS.md`. The gate's play-through by a person is recorded there as NOT RUN.
+
 The hash constants live in `tests/gpu/CMakeLists.txt` (`LC_T15_ROUTE_HASH`, `LC_T15_CATCH_HASH`); a deliberate rule change regenerates them with the `--simulate-only` command, and the CPU tests check the replays' outcomes and determinism without the constant. World-state check kinds: `objective_state`, `threat_state`, `caught_count`, `player_near` (docs in `src/game/replay.h`); they run right after their tick in every mode, including runs frozen with `--stop-at-tick`.
 
 The collision part of T13 (neither the body nor the lamp passes through an opaque wall) runs on
