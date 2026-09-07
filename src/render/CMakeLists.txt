@@ -6,3 +6,17 @@ target_sources(lc_render_contracts INTERFACE
     FILES gpu_layouts.h view_mode.h
 )
 target_include_directories(lc_render_contracts INTERFACE "${CMAKE_SOURCE_DIR}/src")
+
+# lc_render: scene residency, the frame renderer, and captures. Windows only.
+if(WIN32)
+    add_library(lc_render STATIC
+        capture.cpp
+        capture.h
+        render_snapshot.h
+        renderer.cpp
+        renderer.h
+        scene_gpu.cpp
+        scene_gpu.h
+    )
+    target_link_libraries(lc_render PUBLIC lc_graphics lc_scene lc_render_contracts)
+endif()

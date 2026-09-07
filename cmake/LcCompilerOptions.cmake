@@ -14,6 +14,8 @@ if(MSVC)
         /EHsc               # C++ exceptions, no SEH unwinding of extern "C".
         /MP                 # Parallel compilation within a project.
         /Zi                 # Symbols in every configuration (profiling needs release symbols).
+        /external:anglebrackets   # SDK and CRT headers are external: keep their warnings out of /WX.
+        /external:W0
     )
     target_compile_definitions(lc_options INTERFACE
         UNICODE

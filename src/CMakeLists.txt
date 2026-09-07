@@ -1,4 +1,8 @@
 add_subdirectory(core)
 add_subdirectory(scene)
+if(WIN32)
+    add_subdirectory(platform)
+    add_subdirectory(graphics)
+endif()
 add_subdirectory(render)
 add_subdirectory(app)

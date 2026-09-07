@@ -9,6 +9,8 @@ add_library(lc_core STATIC
     ids.h
     image_write.cpp
     image_write.h
+    json_writer.cpp
+    json_writer.h
     log.cpp
     log.h
     math/camera_math.cpp
