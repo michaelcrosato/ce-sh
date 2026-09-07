@@ -6,6 +6,8 @@
 
 #include <windowsx.h>
 
+#include <vector>
+
 namespace lc {
 
 namespace {
@@ -64,6 +66,7 @@ Window::Window(const WindowDesc& desc) {
 
 Window::~Window() {
     if (hwnd_ != nullptr) {
+        CaptureCursor(false);
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
@@ -82,6 +85,65 @@ void Window::PumpMessages() {
     }
 }
 
+void Window::EnableRawMouse() {
+    if (rawMouseEnabled_) {
+        return;
+    }
+    RAWINPUTDEVICE device{};
+    device.usUsagePage = 0x01;  // Generic desktop controls.
+    device.usUsage = 0x02;      // Mouse.
+    device.dwFlags = 0;         // Deliver only while this window has focus.
+    device.hwndTarget = hwnd_;
+    if (!RegisterRawInputDevices(&device, 1, sizeof(device))) {
+        throw Error("RegisterRawInputDevices failed: " + LastErrorToString(GetLastError()));
+    }
+    rawMouseEnabled_ = true;
+    log::Info("Raw mouse input registered");
+}
+
+void Window::ClearInput() {
+    input_.mouseDx = 0.0f;
+    input_.mouseDy = 0.0f;
+    for (bool& pressed : input_.keyPressed) {
+        pressed = false;
+    }
+}
+
+void Window::ApplyCursorClip() {
+    if (!cursorCaptured_ || minimized_) {
+        ClipCursor(nullptr);
+        return;
+    }
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    POINT topLeft{rc.left, rc.top};
+    POINT bottomRight{rc.right, rc.bottom};
+    ClientToScreen(hwnd_, &topLeft);
+    ClientToScreen(hwnd_, &bottomRight);
+    const RECT screen{topLeft.x, topLeft.y, bottomRight.x, bottomRight.y};
+    ClipCursor(&screen);
+}
+
+void Window::CaptureCursor(bool capture) {
+    if (capture == cursorCaptured_) {
+        return;
+    }
+    cursorCaptured_ = capture;
+    if (capture) {
+        if (!cursorHidden_) {
+            ShowCursor(FALSE);
+            cursorHidden_ = true;
+        }
+        ApplyCursorClip();
+    } else {
+        ClipCursor(nullptr);
+        if (cursorHidden_) {
+            ShowCursor(TRUE);
+            cursorHidden_ = false;
+        }
+    }
+}
+
 void Window::SetClientSize(std::uint32_t width, std::uint32_t height) {
     RECT rc{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
     const UINT dpi = GetDpiForWindow(hwnd_);
@@ -90,6 +152,7 @@ void Window::SetClientSize(std::uint32_t width, std::uint32_t height) {
     AdjustWindowRectExForDpi(&rc, style, FALSE, exStyle, dpi);
     SetWindowPos(hwnd_, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     ReadClientSize();
+    ApplyCursorClip();
 }
 
 void Window::SetTitle(const std::wstring& title) { SetWindowTextW(hwnd_, title.c_str()); }
@@ -124,6 +187,7 @@ LRESULT Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             if (wParam == SIZE_MINIMIZED) {
                 minimized_ = true;
                 events_.minimized = true;
+                ApplyCursorClip();
                 return 0;
             }
             minimized_ = false;
@@ -138,8 +202,13 @@ LRESULT Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                     events_.resized = true;
                 }
             }
+            ApplyCursorClip();
             return 0;
         }
+
+        case WM_MOVE:
+            ApplyCursorClip();
+            return 0;
 
         case WM_ENTERSIZEMOVE:
             inSizeMove_ = true;
@@ -153,6 +222,7 @@ LRESULT Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 events_.resized = true;
                 sizeChangedDuringMove_ = false;
             }
+            ApplyCursorClip();
             return 0;
 
         case WM_GETMINMAXINFO: {
@@ -165,16 +235,63 @@ LRESULT Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         case WM_SETFOCUS:
             focused_ = true;
             events_.focusGained = true;
+            ApplyCursorClip();
             return 0;
 
         case WM_KILLFOCUS:
             focused_ = false;
             events_.focusLost = true;
+            for (bool& down : input_.keyDown) {
+                down = false;
+            }
+            input_.mouseDx = 0.0f;
+            input_.mouseDy = 0.0f;
+            ClipCursor(nullptr);  // The cursor is released while another window has focus.
             return 0;
 
+        case WM_INPUT: {
+            if (!rawMouseEnabled_) {
+                break;
+            }
+            UINT size = 0;
+            GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER));
+            if (size == 0) {
+                break;
+            }
+            std::vector<std::uint8_t> buffer(size);
+            if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, buffer.data(), &size, sizeof(RAWINPUTHEADER)) != size) {
+                break;
+            }
+            const auto* raw = reinterpret_cast<const RAWINPUT*>(buffer.data());
+            if (raw->header.dwType == RIM_TYPEMOUSE && (raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0) {
+                input_.mouseDx += static_cast<float>(raw->data.mouse.lLastX);
+                input_.mouseDy += static_cast<float>(raw->data.mouse.lLastY);
+            }
+            break;  // DefWindowProc must still run for WM_INPUT cleanup.
+        }
+
         case WM_KEYDOWN:
-            if (wParam == VK_ESCAPE) {
+        case WM_SYSKEYDOWN: {
+            const unsigned key = static_cast<unsigned>(wParam) & 0xFF;
+            const bool repeat = (lParam & (1 << 30)) != 0;
+            if (!repeat) {
+                input_.keyPressed[key] = true;
+            }
+            input_.keyDown[key] = true;
+            if (wParam == VK_ESCAPE && !repeat) {
                 events_.escapePressed = true;
+            }
+            if (message == WM_SYSKEYDOWN) {
+                break;  // Let Alt combinations reach DefWindowProc.
+            }
+            return 0;
+        }
+
+        case WM_KEYUP:
+        case WM_SYSKEYUP:
+            input_.keyDown[static_cast<unsigned>(wParam) & 0xFF] = false;
+            if (message == WM_SYSKEYUP) {
+                break;
             }
             return 0;
 

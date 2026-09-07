@@ -50,10 +50,40 @@ struct DoorHandle {
     InstanceId id;
     math::Vec3 hinge;          // World-space hinge line base point (on the floor).
     math::Mat4 closedTransform;
+    math::Vec3 centre;         // World-space centre of the closed leaf (interaction point).
+    float width = 0.9f;
 };
 DoorHandle AddDoor(Scene& scene, const std::string& name, const RoomSpec& spec, const DoorwaySpec& doorway, const DoorSpec& door,
                    std::uint32_t material);
+
+// General door leaf: the hinge line rises from hingeBase; the leaf extends `width` along widthDir
+// (a horizontal unit axis) and `thickness` along thicknessDir (the wall's thickness direction,
+// starting `inset` from the room-side face at hingeBase). Positive angles rotate about +Y.
+struct DoorLeafSpec {
+    math::Vec3 hingeBase;
+    math::Vec3 widthDir{1.0f, 0.0f, 0.0f};
+    math::Vec3 thicknessDir{0.0f, 0.0f, 1.0f};
+    float width = 0.9f;
+    float height = 2.1f;
+    float thickness = 0.04f;
+    float inset = 0.005f;
+    float overlap = 0.01f;
+};
+DoorHandle AddDoorLeaf(Scene& scene, const std::string& name, const DoorLeafSpec& spec, std::uint32_t material);
 math::Mat4 DoorTransform(const DoorHandle& door, float angleRadians);
+
+// Axis-aligned slab from min to max corner (a box instance with its own mesh).
+InstanceId AddSlab(Scene& scene, const std::string& name, math::Vec3 min, math::Vec3 max, std::uint32_t material);
+
+// A wall along X or Z with a rectangular opening: two side pieces and a lintel. `axisX` selects a
+// wall that runs along X (opening measured in x) versus along Z (opening measured in z).
+struct WallOpening {
+    float centre = 0.0f;   // Opening centre along the wall's running axis.
+    float width = 0.9f;
+    float height = 2.1f;   // From the wall's bottom.
+};
+void AddWallWithOpening(Scene& scene, const std::string& namePrefix, math::Vec3 min, math::Vec3 max, bool axisX, const WallOpening& opening,
+                        std::uint32_t material);
 
 // A rectangle emitter (two triangles) of the given size, centred at position, with its emitting
 // side facing `facing` (one of +/-X, +/-Y, +/-Z). The mesh is named after the instance.

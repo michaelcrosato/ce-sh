@@ -112,6 +112,8 @@ public:
     void CollectFinalTimings();
 
     const std::vector<gfx::TimerResult>& LastTimings() const { return lastTimings_; }
+    // Frames in which the TLAS was rebuilt (first frame plus every frame with a transform change).
+    std::uint64_t TlasRebuildCount() const { return tlasRebuilds_; }
     std::uint32_t Width() const { return width_; }
     std::uint32_t Height() const { return height_; }
     std::uint64_t FrameCounter() const { return frameCounter_; }
@@ -176,6 +178,7 @@ private:
     std::uint32_t sampleIndex_ = 0;
     std::uint64_t accumulationKey_ = 0;
     std::uint32_t lastDispatchCount_ = 0;
+    std::uint64_t tlasRebuilds_ = 0;
 };
 
 }  // namespace lc

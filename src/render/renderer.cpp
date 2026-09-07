@@ -376,6 +376,9 @@ void Renderer::RecordTrace(const RenderSnapshot& snapshot) {
         const std::uint32_t tlasTimer = timers_.Begin(list_.Get(), "scene_update");
         sceneGpu_->UpdateFrame(*snapshot.scene, *frame.arena, list_.Get());
         timers_.End(list_.Get(), tlasTimer);
+        if (sceneGpu_->TlasRebuiltThisFrame()) {
+            ++tlasRebuilds_;
+        }
 
         if (mode_ == RenderMode::Diagnostic) {
             RecordDiagnostic(snapshot, *frame.arena);

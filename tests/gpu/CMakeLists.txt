@@ -25,6 +25,20 @@ add_test(NAME gpu_t10_furnace_r70 COMMAND LastCircuit --scene t10_furnace_r70 --
 add_test(NAME gpu_t10_furnace_closed_form COMMAND LastCircuit --scene t10_furnace_r100_normal --mode reference --spp 1024 --validate --headless --samples-per-frame 16)
 add_test(NAME gpu_metals_room_positive COMMAND LastCircuit --scene metals_room --mode reference --spp 64 --validate --headless)
 
+# M3: motion through deterministic replays (spec §4, §19 T05/T06). Each check runs in its own process
+# stopped at its tick; reference mode for radiance checks, raw mode for identity checks in motion.
+set(_lc_replay "${CMAKE_SOURCE_DIR}/tests/replay")
+add_test(NAME gpu_two_room_static_mirror COMMAND LastCircuit --scene two_room --mode reference --spp 32 --validate --headless)
+add_test(NAME gpu_t05_mirror_threat_reference COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t05_mirror_threat.json" --stop-at-tick 740 --mode reference --spp 64 --validate --headless)
+add_test(NAME gpu_t05_mirror_threat_raw COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t05_mirror_threat.json" --stop-at-tick 740 --mode raw --validate --headless)
+add_test(NAME gpu_t05_mirror_threat_absent COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t05_mirror_threat.json" --stop-at-tick 930 --mode reference --spp 16 --validate --headless)
+add_test(NAME gpu_t06_door_open COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t06_door_light.json" --stop-at-tick 300 --mode reference --spp 64 --validate --headless)
+add_test(NAME gpu_t06_door_closed COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t06_door_light.json" --stop-at-tick 420 --mode reference --spp 64 --validate --headless)
+add_test(NAME gpu_t06_lamp_on_shelf COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t06_lamp_shelf.json" --stop-at-tick 800 --mode reference --spp 128 --validate --headless)
+add_test(NAME gpu_t06_lamp_off COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t06_lamp_shelf.json" --stop-at-tick 900 --mode reference --spp 128 --validate --headless)
+# Motion frame by frame: one tick per frame in raw mode; TLAS rebuilds must match the frames with motion.
+add_test(NAME gpu_replay_motion_tlas_rebuilds COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t06_door_light.json" --mode raw --frames 120 --validate --headless)
+
 # Cross-run comparisons (patch means within max(relative tolerance, 3 standard errors)).
 # Same path family for every estimator: with N hits the NEE-based estimators (mis, light) also
 # capture direct light at the N-th surface, which BSDF-only can reach only as an (N+1)-th hit.
@@ -45,6 +59,8 @@ set(_lc_gpu_tests
     gpu_t03_no_sources gpu_t04_sealed_room gpu_t04_open_door gpu_t08_analytic_mis gpu_t08_analytic_light gpu_t08_analytic_bsdf
     gpu_t09_area_large gpu_t07_indirect_colour gpu_t08_box_positive gpu_mirror_identity_and_energy
     gpu_t10_furnace_r05 gpu_t10_furnace_r35 gpu_t10_furnace_r70 gpu_t10_furnace_closed_form gpu_metals_room_positive
+    gpu_two_room_static_mirror gpu_t05_mirror_threat_reference gpu_t05_mirror_threat_raw gpu_t05_mirror_threat_absent
+    gpu_t06_door_open gpu_t06_door_closed gpu_t06_lamp_on_shelf gpu_t06_lamp_off gpu_replay_motion_tlas_rebuilds
     gpu_t08_box_strategies_agree gpu_t07_agrees_with_higher_sample_reference gpu_t08_box_depth_truncation_report)
 set_tests_properties(${_lc_gpu_tests} PROPERTIES SKIP_RETURN_CODE 3 LABELS gpu TIMEOUT 900)
 set_tests_properties(gpu_resize_test PROPERTIES LABELS "gpu;window" RUN_SERIAL TRUE)

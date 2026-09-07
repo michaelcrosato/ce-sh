@@ -64,8 +64,17 @@ with `-Od`, the Release preset with `-O3`.
 .\build\windows-debug\bin\LastCircuit.exe --scene rt_boxes --headless --frames 3 --capture .\artifacts\m1 --view normals
 .\build\windows-debug\bin\LastCircuit.exe --scene rt_boxes --resize-test
 .\build\windows-debug\bin\LastCircuit.exe --list-adapters --env-report .\artifacts\environment.json
+.\build\windows-debug\bin\LastCircuit.exe --scene two_room --play --exposure 4        # live play (see below)
+.\build\windows-debug\bin\LastCircuit.exe --scene two_room --replay .\tests\replay\t05_mirror_threat.json --stop-at-tick 740 --mode reference --spp 64 --validate --headless
 .\build\windows-debug\bin\LastCircuit.exe --help
 ```
+
+Live play (`--play`, scene `two_room`): W A S D move, mouse look, Shift sprint, E interact (door,
+lamp pick-up, placing the lamp on a socket), F lamp switch, Escape releases or recaptures the
+cursor (the simulation pauses while it is released or the window lacks focus). Add
+`--record <file>` to write the per-tick input as a replay on exit; `--replay <file>` plays it
+back one tick per frame, and `--stop-at-tick N` freezes the world at tick N for reference-mode
+renders and `--validate` checks.
 
 Runtime requirements: the `shaders` directory must stay beside `LastCircuit.exe`; the D3D12 debug
 layer is on by default in Debug builds (`--debug-layer off` disables it, `--gpu-validation` adds

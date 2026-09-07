@@ -3,6 +3,7 @@
 #include "core/math/radiometry.h"
 #include "scene/primitives.h"
 #include "scene/rooms.h"
+#include "scene/two_room_level.h"
 
 namespace lc {
 
@@ -384,7 +385,7 @@ SceneDescription BuildMetalsRoom() {
 std::vector<std::string> BuiltinSceneNames() {
     return {"rt_triangle", "rt_boxes", "t03_dark_room", "t04_sealed", "t04_open", "t07_bleed", "t08_box",
             "t09_rect_light", "t09_rect_light_large", "mirror_box", "t10_furnace_r05", "t10_furnace_r35",
-            "t10_furnace_r70", "t10_furnace_r100_normal", "metals_room"};
+            "t10_furnace_r70", "t10_furnace_r100_normal", "metals_room", "two_room"};
 }
 
 std::optional<SceneDescription> BuildBuiltinScene(std::string_view name) {
@@ -403,6 +404,7 @@ std::optional<SceneDescription> BuildBuiltinScene(std::string_view name) {
     if (name == "t10_furnace_r70") return BuildT10Furnace(0.70f, "t10_furnace_r70", false);
     if (name == "t10_furnace_r100_normal") return BuildT10Furnace(1.0f, "t10_furnace_r100_normal", true);
     if (name == "metals_room") return BuildMetalsRoom();
+    if (name == "two_room") return BuildTwoRoomLevel().description;
     return std::nullopt;
 }
 

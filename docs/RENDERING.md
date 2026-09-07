@@ -235,8 +235,22 @@ of squares, u6 stats. Matrices in structured buffers are three explicit `float4`
   (energy loss at high roughness, no multiple-scattering compensation); no participating media;
   no tone mapping.
 
+## Motion history (M3)
+
+- Every instance carries `objectToWorld` and `prevObjectToWorld`; `Scene::CommitRenderedFrame`
+  copies current to previous after each presented frame, so "previous" always means the previous
+  *image*, not the previous simulation tick (spec §9). `InstanceRecord.prevObjectToWorldRow` ships
+  both to the GPU; no pass consumes it yet (motion vectors arrive with the denoiser in M4).
+- The world writes render transforms only for entities whose interpolated pose changed; the TLAS
+  is rebuilt only in those frames. `--validate` on a frame-by-frame replay asserts that the rebuild
+  count equals the number of frames with motion (plus the first frame).
+- The accumulation key includes every instance's transform revision and the material revision, so
+  any motion or source change in reference mode restarts accumulation (raw mode is per frame anyway).
+- Camera cuts, teleports, and scene reloads are not yet events; a lamp placement is a discrete pose
+  change that resets its own interpolation.
+
 ## Not implemented yet
 
-Denoiser buffer contract and history policy (M4); motion vectors and previous-frame data (the
-records carry previous transforms but no pass consumes them); scene files (M3); tone mapping
-beyond clamping; multiple-scattering compensation for rough conductors.
+Denoiser buffer contract and history policy (M4); motion vectors from the previous transforms;
+scene files (M3.5); tone mapping beyond clamping; multiple-scattering compensation for rough
+conductors.

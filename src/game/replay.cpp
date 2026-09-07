@@ -121,6 +121,7 @@ std::string Replay::ToJson() const {
         if (!c.entity.empty()) j.Field("entity", c.entity);
         if (c.otherPoint) WriteVec3(j, "otherPoint", *c.otherPoint);
         j.Field("minimum", static_cast<double>(c.minimum));
+        j.Field("maximum", static_cast<double>(c.maximum));
         j.Field("tolerance", static_cast<double>(c.tolerance));
         j.Field("ratioFactor", static_cast<double>(c.ratioFactor));
         j.Field("halfSize", c.halfSize);
@@ -200,10 +201,11 @@ std::optional<Replay> Replay::FromJson(std::string_view text, std::string& error
             math::Vec3 other;
             if (ReadVec3(c.Get("otherPoint"), other)) check.otherPoint = other;
             check.minimum = static_cast<float>(c.NumberOr("minimum", 1e-3));
+            check.maximum = static_cast<float>(c.NumberOr("maximum", 1e-3));
             check.tolerance = static_cast<float>(c.NumberOr("tolerance", 1e-6));
             check.ratioFactor = static_cast<float>(c.NumberOr("ratioFactor", 1.2));
             check.halfSize = static_cast<std::uint32_t>(c.NumberOr("halfSize", 2));
-            static const char* kKinds[] = {"hit", "not_visible", "patch_positive", "patch_zero", "patch_ratio"};
+            static const char* kKinds[] = {"hit", "not_visible", "patch_positive", "patch_dark", "patch_zero", "patch_ratio"};
             bool known = false;
             for (const char* k : kKinds) known = known || check.kind == k;
             if (!known) {

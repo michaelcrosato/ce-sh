@@ -75,6 +75,22 @@ with small bright sources; the estimator is unbiased. The spec allows evaluating
 outlier clamp later (off in reference mode, bias recorded); the denoiser (M4) is the other half of
 the answer. Verification: an M4 test comparing patch means with and without the clamp.
 
+## KI-015 — medium — play mode — no collision or sweeps yet
+
+The player and the carried lamp pass through walls and doors (spec §14 collision is M5). The
+replays avoid geometry by construction. Verification: M5 capsule controller with the T13 test.
+
+## KI-016 — low — all builds — dark rooms need exposure
+
+With fixed exposure 1 the hall and the inspection room are nearly black on screen (their light
+levels are a design choice; the radiance checks are unaffected). `--exposure` scales the display
+only; a documented tone curve and an accessibility brightness control arrive with M5/M7.
+
+## KI-017 — info — play mode — no on-screen prompts
+
+The interaction target is logged (`[E] door`) instead of drawn; a diagnostic panel (Dear ImGui
+evaluation) is planned with the scene-file reload command.
+
 ## KI-012 — info — all builds — raw mode is noisy by design
 
 One path sample per pixel per frame with no temporal filtering (spec §13 raw mode). Real-time

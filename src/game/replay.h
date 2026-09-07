@@ -22,13 +22,14 @@ struct InputSegment {
 // Checks reference entities by name; the application resolves names to stable ids.
 struct ReplayCheck {
     std::uint64_t tick = 0;
-    std::string kind;                        // "hit", "not_visible", "patch_positive", "patch_zero", "patch_ratio".
+    std::string kind;                        // "hit", "not_visible", "patch_positive", "patch_dark", "patch_zero", "patch_ratio".
     std::string description;
     std::optional<math::Vec3> point;         // World point projected at validation time.
     std::optional<math::Vec2> pixel;         // Or a normalized pixel.
     std::string entity;                      // "hit": the entity whose id the first non-mirror hit must carry; "not_visible": must not appear outside the mirror.
     std::optional<math::Vec3> otherPoint;    // "patch_ratio".
-    float minimum = 1e-3f;                   // "patch_positive".
+    float minimum = 1e-3f;                   // "patch_positive": mean luminance must exceed.
+    float maximum = 1e-3f;                   // "patch_dark": mean luminance must stay below.
     float tolerance = 1e-6f;                 // "patch_zero".
     float ratioFactor = 1.2f;                // "patch_ratio".
     std::uint32_t halfSize = 2;

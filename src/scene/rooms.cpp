@@ -15,15 +15,64 @@ InstanceId AddBox(Scene& scene, const std::string& name, Vec3 halfExtents, Vec3 
     return scene.AddInstance(name, mesh, Mat4::Translation(centre), material);
 }
 
-namespace {
-
 InstanceId AddSlab(Scene& scene, const std::string& name, Vec3 min, Vec3 max, std::uint32_t material) {
     const Vec3 half = (max - min) * 0.5f;
     const Vec3 centre = (max + min) * 0.5f;
     return AddBox(scene, name, half, centre, material);
 }
 
-}  // namespace
+void AddWallWithOpening(Scene& scene, const std::string& p, Vec3 min, Vec3 max, bool axisX, const WallOpening& o, std::uint32_t material) {
+    const float lo = axisX ? min.x : min.z;
+    const float hi = axisX ? max.x : max.z;
+    const float a0 = o.centre - o.width * 0.5f;
+    const float a1 = o.centre + o.width * 0.5f;
+    if (a0 <= lo || a1 >= hi || min.y + o.height >= max.y) {
+        throw Error("wall opening does not fit inside the wall");
+    }
+    auto piece = [&](const std::string& suffix, float from, float to, float y0, float y1) {
+        Vec3 pmin = min;
+        Vec3 pmax = max;
+        if (axisX) {
+            pmin.x = from;
+            pmax.x = to;
+        } else {
+            pmin.z = from;
+            pmax.z = to;
+        }
+        pmin.y = y0;
+        pmax.y = y1;
+        AddSlab(scene, p + suffix, pmin, pmax, material);
+    };
+    piece("_side_a", lo, a0, min.y, max.y);
+    piece("_side_b", a1, hi, min.y, max.y);
+    piece("_lintel", a0, a1, min.y + o.height, max.y);
+}
+
+DoorHandle AddDoorLeaf(Scene& scene, const std::string& name, const DoorLeafSpec& s, std::uint32_t material) {
+    // Local leaf box: x along widthDir, y up, z along thicknessDir; built axis-aligned then oriented.
+    const Vec3 w = math::Normalize(s.widthDir);
+    const Vec3 t = math::Normalize(s.thicknessDir);
+    const float halfW = (s.width + 2.0f * s.overlap) * 0.5f;
+    const float halfH = (s.height + s.overlap) * 0.5f;
+    const float halfT = s.thickness * 0.5f;
+    const Vec3 centre = s.hingeBase + w * (s.width * 0.5f) + Vec3{0.0f, halfH, 0.0f} + t * (s.inset + halfT);
+    // Orientation: yaw so that local +X maps to widthDir. The leaf box is symmetric about its
+    // thickness axis, so local +Z may map to either +thicknessDir or -thicknessDir; the world-space
+    // centre above already places the slab inside the wall along thicknessDir.
+    if (std::fabs(math::Dot(w, t)) > 1e-3f || std::fabs(w.y) > 1e-3f || std::fabs(t.y) > 1e-3f) {
+        throw Error("AddDoorLeaf: widthDir and thicknessDir must be perpendicular horizontal axes");
+    }
+    const float yaw = std::atan2(w.z, w.x) * -1.0f;  // RotationY(yaw) maps +X to (cos yaw, 0, -sin yaw).
+    const Mat4 orientation = Mat4::RotationY(yaw);
+    DoorHandle h;
+    h.hinge = s.hingeBase + t * (s.inset + halfT);
+    h.closedTransform = Mat4::Translation(centre) * orientation;
+    h.centre = centre;
+    h.width = s.width;
+    const MeshId mesh = scene.AddMesh(MakeBox(name, {halfW, halfH, halfT}));
+    h.id = scene.AddInstance(name, mesh, h.closedTransform, material);
+    return h;
+}
 
 RoomInstances AddRoom(Scene& scene, const std::string& p, const RoomSpec& s, const RoomMaterials& m) {
     const float t = s.wallThickness;
@@ -66,6 +115,8 @@ DoorHandle AddDoor(Scene& scene, const std::string& name, const RoomSpec& s, con
     DoorHandle h;
     h.hinge = {x0, y0, (z0 + z1) * 0.5f};
     h.closedTransform = Mat4::Translation(centre);
+    h.centre = centre;
+    h.width = d.doorWidth;
     const MeshId mesh = scene.AddMesh(MakeBox(name, half));
     h.id = scene.AddInstance(name, mesh, h.closedTransform, material);
     return h;

@@ -41,6 +41,12 @@ struct AppOptions {
     std::optional<std::filesystem::path> stats;
     std::optional<std::filesystem::path> envReport;
     std::optional<std::filesystem::path> logFile;
+    // Simulation (M3): live play, input recording, deterministic replay.
+    bool play = false;                                  // Live input with the cursor captured (windowed).
+    std::optional<std::filesystem::path> record;        // With --play: write the input replay.
+    std::optional<std::filesystem::path> replay;        // Drive the simulation from a replay file.
+    std::int64_t stopAtTick = -1;                       // With --replay: run exactly this many ticks, then freeze.
+    float mouseSensitivity = 0.0022f;                   // Radians per raw mouse count.
     bool help = false;
 };
 

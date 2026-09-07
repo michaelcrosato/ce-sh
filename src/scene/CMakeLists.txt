@@ -17,5 +17,7 @@ add_library(lc_scene STATIC
     rooms.h
     scene.cpp
     scene.h
+    two_room_level.cpp
+    two_room_level.h
 )
 target_link_libraries(lc_scene PUBLIC lc_core)

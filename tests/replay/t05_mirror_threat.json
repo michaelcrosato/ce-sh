@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "scene": "two_room",
+  "tickRate": 60,
+  "seed": 0,
+  "segments": [
+    { "from": 0, "to": 0, "interact": true },
+    { "from": 60, "to": 231, "moveZ": 1.0 },
+    { "from": 232, "to": 241, "lookDx": -0.15707963 },
+    { "from": 242, "to": 605, "moveZ": 1.0 },
+    { "from": 606, "to": 669, "moveX": 1.0 }
+  ],
+  "checks": [
+    { "tick": 740, "kind": "hit", "description": "T05: the mirror shows the threat crossing hall 1 while it is outside the direct view", "point": [6.4, 1.5, 11.99], "entity": "threat_body" },
+    { "tick": 740, "kind": "not_visible", "description": "T05: the threat is not visible directly from Room B", "entity": "threat_body" },
+    { "tick": 740, "kind": "patch_positive", "description": "T05: the mirrored threat is lit by the hall emergency fixture", "point": [6.4, 1.5, 11.99], "minimum": 0.0001, "halfSize": 2 },
+    { "tick": 930, "kind": "hit", "description": "T05: with the threat at the far end of its path the mirror shows the hall wall instead", "point": [6.4, 1.5, 11.99], "entity": "a_h1_wall_neg_z" }
+  ]
+}

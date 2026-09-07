@@ -33,6 +33,10 @@ to pass. When a scene was redesigned (T07, see below) the tolerance stayed and t
 | `test_material.cpp` (conductor part) | Roughness range [0.02, 1] enforced; type names |
 | `test_scene.cpp` | Box closed and outward; quad faces +Y; mesh validation; stable ids and transform history; every built-in hit expectation agrees with a CPU Möller–Trumbore ray cast that follows mirrors; every radiance patch is visible and unoccluded; projection inverts ray generation; `LookAt`; room slabs enclose the volume with solid corners and 0.15 m thickness; the closed door blocks 9 rays through the doorway and clears it when open; rectangle emitters face the requested axis |
 | `test_layouts.cpp` | `sizeof`/`offsetof` of every shared GPU record; view-mode names |
+| `test_json_reader.cpp` | Nested documents, escapes and surrogate pairs, rejection of trailing commas, bare words, duplicate keys, depth over 64, line/column in errors, writer round trip |
+| `test_simulation.cpp` | Whole ticks and alpha, the 0.25 s cap, exact tick runs; replay run-length recording and lookup; JSON round trip; version, ordering, and kind validation |
+| `test_world.cpp` | Player movement and pitch clamp; door state machine and interpolated angle; threat path and ping-pong; lamp held pose, sockets, toggle; the world writes only moving transforms and keeps rendered history; the two-room level: triangle and emitter budgets, the mirror shows the threat that is not directly visible, the door blocks the fixture when closed and not when open |
+| `test_replay_scripts.cpp` | Runs `t05_mirror_threat`, `t06_door_light`, `t06_lamp_shelf` on the CPU: poses at check ticks, door and lamp states, mirror identity through the ray caster, direct invisibility of the threat, light paths blocked/unblocked by the door, the shelf lamp's line to the floor patch |
 
 ## GPU tests (`tests/gpu/CMakeLists.txt`)
 
@@ -65,6 +69,29 @@ invalid-value counters (NaN, inf, negative, zero pdf) to be zero and zero debug-
 | `gpu_t10_furnace_r05` / `_r35` / `_r70` | `t10_furnace_r*`, 512 spp: F0 = 1 conductor floor (400 m) under a 400 m uniform emitter of radiance 1, camera at 45 degrees; roughness 0.05, 0.35, 0.70 | Reflected radiance equals the single-scattering GGX directional albedo integrated on the CPU from the same formulas (`GgxDirectionalAlbedo`, checked against grid refinement to 0.1 %) within `max(2 %, 3 SE)`; no invalid values; energy never exceeds 1 |
 | `gpu_t10_furnace_closed_form` | `t10_furnace_r100_normal`, 1024 spp: roughness 1 at normal incidence | Radiance equals the closed form `1 - ln 2 = 0.3069` within 2 % (D = 1/pi, Lambda = (sec - 1)/2) |
 | `gpu_metals_room_positive` | `metals_room`, 64 spp: four steel boxes (roughness 0.05 to 0.8) and a copper slab under a ceiling panel | Copper patch lit; no invalid values (visual scene for inspection) |
+
+### M3: motion through deterministic replays (spec §4, §19 T05/T06)
+
+The replays in `tests/replay/*.json` (version 1) hold run-length input segments (`from`, `to`,
+`moveX`, `moveZ`, `lookDx`, `lookDy`, `sprint`, `interact`, `lamp`) and checks at ticks:
+`hit` (the pixel of a world point or `[u, v]` must report an entity's stable id as the first
+non-mirror surface), `not_visible` (no pixel sees the entity directly, i.e. with zero mirror
+bounces), `patch_positive` (mean luminance > `minimum`), `patch_dark` (< `maximum`),
+`patch_zero`, `patch_ratio`. `LastCircuit --scene two_room --replay <file> --stop-at-tick N --validate`
+advances exactly N ticks, renders, and evaluates the checks at tick N. The CPU test
+`test_replay_scripts.cpp` runs every committed replay without a GPU and verifies the player pose,
+door and lamp states, threat position, and the mirror/occlusion facts with the ray caster first.
+
+| Test | Replay, tick, mode | Pass criteria |
+|---|---|---|
+| `gpu_two_room_static_mirror` | static scene, reference 32 spp | The mirror pixel's first non-mirror hit is the threat parked at the crossing point; that mirror patch is lit (`> 1e-4`, derived from the emergency fixture and the threat albedo) |
+| `gpu_t05_mirror_threat_reference` / `_raw` | `t05_mirror_threat.json`, tick 740, reference 64 spp and raw 1 spp | The player has walked from Room A through the door and the hall to the Room B check pose; the mirror pixel reports `threat_body` after one mirror bounce; no pixel sees the threat directly; the mirrored threat patch is lit (`> 1e-4`) |
+| `gpu_t05_mirror_threat_absent` | tick 930, reference 16 spp | With the threat at the far end of its path the same pixel reports the hall wall `a_h1_wall_neg_z` |
+| `gpu_t06_door_open` | `t06_door_light.json`, tick 300, reference 64 spp | The hall floor patch by the open door is lit by Room A's fixture (`> 5e-3`); the open leaf is seen standing in the hall |
+| `gpu_t06_door_closed` | tick 420, reference 64 spp | The same patch is dark (`< 2e-3`, only the emergency spill remains); the closed leaf fills the doorway |
+| `gpu_t06_lamp_on_shelf` | `t06_lamp_shelf.json`, tick 800, reference 128 spp | The lamp, picked up in Room A and carried through the level, rests on the shelf (housing and shelf identities); the floor in front of the shelf is lit (`> 3e-4`) in the otherwise dark inspection room |
+| `gpu_t06_lamp_off` | tick 900, reference 128 spp | After the F press the same patch is dark (`< 1e-4`) |
+| `gpu_replay_motion_tlas_rebuilds` | `t06_door_light.json`, one tick per frame, raw, 120 frames | TLAS rebuild count equals the number of frames with motion (plus the first frame); zero debug-layer errors |
 
 Cross-run comparisons via `tests/scripts/compare_runs.ps1` (patch means per channel within
 `max(relTol * |ref|, 3 * sqrt(se_a^2 + se_b^2))`):
@@ -104,7 +131,13 @@ Approved image baselines are not yet stored; radiance is currently checked numer
 - `metals_room`: sharp reflections of the panel in the smoothest steel box, progressively blurrier
   in the rougher ones, a copper-tinted highlight on the slab, no fireflies.
 
+- `two_room` at tick 740 (exposure 6): Room B dark; the mirror on the left shows the warm-lit hall
+  through the doorway with the threat's silhouette; at tick 300 Room A's light falls through the
+  open doorway onto the hall floor with the open leaf beside it; at tick 800 the lamp on the shelf
+  lights the floor of the dark inspection room.
+
 ## Not yet implemented
 
-T05/T06 motion (M3), T11 systematic offset sweeps (partly covered by the T03/T04 seals and the
-400 m furnace floor), T12–T18.
+T11 systematic offset sweeps (partly covered by the T03/T04 seals and the 400 m furnace floor),
+T12–T18. The §4 fourth sequence step (the threat's shadow moving across a wall before direct
+contact) is staged in M5.

@@ -60,6 +60,11 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     p.AddStringOption("stats", "Write patch means and standard errors of the scene's statistics patches to this JSON file.", "");
     p.AddStringOption("env-report", "Write a JSON environment report to this file.", "");
     p.AddStringOption("log", "Append the log to this file.", "");
+    p.AddFlag("play", "Live play (scene two_room): WASD move, mouse look, Shift sprint, E interact, F lamp, Escape releases the cursor.");
+    p.AddStringOption("record", "With --play: write the per-tick input to this replay file on exit.", "");
+    p.AddStringOption("replay", "Drive the simulation from this replay file (one tick per frame; deterministic).", "");
+    p.AddIntOption("stop-at-tick", "With --replay: advance exactly this many ticks before rendering, then freeze (for reference mode and checks).", -1);
+    p.AddFloatOption("sensitivity", "Mouse look sensitivity in radians per raw count.", 0.0022f);
 
     ParsedOptions result;
     result.usage = p.Usage("LastCircuit.exe",
@@ -189,6 +194,36 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
 
     if (o.resizeTest && o.headless) {
         result.error = "--resize-test needs a window; remove --headless";
+        return result;
+    }
+
+    o.play = p.Has("play");
+    if (const std::string s = p.GetString("record"); !s.empty()) o.record = std::filesystem::path(s);
+    if (const std::string s = p.GetString("replay"); !s.empty()) o.replay = std::filesystem::path(s);
+    o.stopAtTick = p.GetInt("stop-at-tick");
+    o.mouseSensitivity = p.GetFloat("sensitivity");
+    if (o.play && o.headless) {
+        result.error = "--play needs a window; remove --headless";
+        return result;
+    }
+    if (o.play && o.replay) {
+        result.error = "--play and --replay are exclusive";
+        return result;
+    }
+    if (o.record && !o.play) {
+        result.error = "--record requires --play";
+        return result;
+    }
+    if (o.stopAtTick >= 0 && !o.replay) {
+        result.error = "--stop-at-tick requires --replay";
+        return result;
+    }
+    if (o.stopAtTick < -1) {
+        result.error = std::format("--stop-at-tick must be -1 or a tick count (got {})", o.stopAtTick);
+        return result;
+    }
+    if (!(o.mouseSensitivity > 0.0f) || o.mouseSensitivity > 1.0f) {
+        result.error = std::format("--sensitivity must be within (0, 1] radians per count (got {})", o.mouseSensitivity);
         return result;
     }
 

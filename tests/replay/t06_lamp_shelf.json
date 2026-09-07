@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "scene": "two_room",
+  "tickRate": 60,
+  "seed": 0,
+  "segments": [
+    { "from": 0, "to": 9, "lookDy": -0.11 },
+    { "from": 10, "to": 10, "interact": true },
+    { "from": 11, "to": 20, "lookDy": 0.11 },
+    { "from": 21, "to": 21, "interact": true },
+    { "from": 81, "to": 252, "moveZ": 1.0 },
+    { "from": 253, "to": 262, "lookDx": -0.15707963 },
+    { "from": 263, "to": 626, "moveZ": 1.0 },
+    { "from": 627, "to": 690, "moveX": 1.0 },
+    { "from": 691, "to": 700, "lookDx": -0.15707963 },
+    { "from": 701, "to": 710, "lookDy": -0.10 },
+    { "from": 711, "to": 711, "interact": true },
+    { "from": 801, "to": 801, "lamp": true }
+  ],
+  "checks": [
+    { "tick": 800, "kind": "hit", "description": "lamp placed on the shelf: the shelf is in view", "point": [4.15, 0.95, 10.45], "entity": "lamp_shelf" },
+    { "tick": 800, "kind": "hit", "description": "lamp placed on the shelf: the housing rests on it", "point": [4.2, 1.02, 10.25], "entity": "lamp_housing" },
+    { "tick": 800, "kind": "patch_positive", "description": "the shelf lamp lights the floor in front of the shelf in the dark inspection room", "point": [4.7, 0.0, 10.25], "minimum": 0.0003, "halfSize": 3 },
+    { "tick": 900, "kind": "patch_dark", "description": "switching the lamp off darkens the same floor patch", "point": [4.7, 0.0, 10.25], "maximum": 0.0001, "halfSize": 3 }
+  ]
+}

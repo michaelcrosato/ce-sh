@@ -12,29 +12,39 @@ State at milestone M1. Everything below exists in the code; nothing is a plan.
 | `lc_app_options` | `src/app/options.*` | `AppOptions` from the command line | `lc_core`, contracts |
 | `lc_platform` | `src/platform` | Win32 window and events, file helpers, HRESULT reporting | `lc_core` |
 | `lc_graphics` | `src/graphics/d3d12` | Device/adapter/feature checks, queue + fence, swap chain, descriptor heap, buffers, UAV textures + readback, upload arena, timestamp queries, BLAS/TLAS, root signature + compute PSO | `lc_platform` |
-| `lc_render` | `src/render` | `SceneGpu` (geometry residency, BLAS per mesh, TLAS), `Renderer` (frame recording, diagnostics pass, readback, layout probe), capture writer | `lc_graphics`, `lc_scene` |
-| `LastCircuit.exe` | `src/app` | Modes (list adapters, windowed, headless, validate, resize test, capture), environment report, main loop | everything above |
-| `lc_cpu_tests.exe` | `tests/cpu` | Portable unit tests | `lc_core`, `lc_scene`, options, contracts |
+| `lc_render` | `src/render` | `SceneGpu` (geometry residency, BLAS per mesh, TLAS, per-frame instance/material/emitter tables), `Renderer` (diagnostic pass, path tracer in raw and reference modes, accumulation, readback, layout probe), capture writer | `lc_graphics`, `lc_scene` |
+| `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks), `World` (player, door, lamp fixture, threat, interaction) | `lc_scene`, `lc_core` |
+| `LastCircuit.exe` | `src/app` | Modes (list adapters, windowed, headless, play, record, replay, validate, resize test, capture, stats), environment report, main loop | everything above |
+| `lc_cpu_tests.exe` | `tests/cpu` | Portable unit tests, including CPU runs of the committed replays | `lc_core`, `lc_scene`, `lc_game`, options, contracts |
 
-The game/scene layer (`lc_scene`) contains no D3D12 types. The renderer reads a `RenderSnapshot`
-(scene pointer, camera, frame index, view mode) and never mutates the scene.
+The scene and game layers (`lc_scene`, `lc_game`) contain no D3D12 types. The renderer reads a
+`RenderSnapshot` (scene pointer, camera, frame index, view mode) and never mutates the scene.
 
-## Data flow per frame (spec §9 order, M1 subset)
+## Data flow per frame (spec §9 order)
 
 ```text
-Window::PumpMessages            poll input and window events (close, resize, focus, minimize)
-(no simulation yet)             M3 adds the fixed-step simulation
-RenderSnapshot                  scene + camera + frame index + view mode
+Window::PumpMessages            window events; raw mouse deltas and key edges accumulate until ClearInput
+Simulation::Advance             live play: real time -> whole 60 Hz ticks (capped at 0.25 s per frame), remainder = alpha
+  or RunTicks                   replay: exactly one tick per frame, or all ticks up to --stop-at-tick before rendering
+World::Tick                     per tick: interaction edges (door, lamp pick-up/place/toggle), player, door, threat, lamp
+World::WriteRenderScene(alpha)  interpolated poses -> Scene::SetTransform only for entities whose pose changed
+RenderSnapshot                  scene + camera (interpolated player eye) + frame index + view mode
 Renderer::BeginFrame            wait for this slot's fence (2 frames in flight), reset allocator and upload arena,
                                 collect the GPU timings of the frame that last used the slot
-Renderer::RecordTrace           SceneGpu::UpdateInstances: InstanceRecords into the upload arena every frame;
-                                TLAS rebuild (with UAV barriers) only when a transform revision changed
-                                FrameConstants into the upload arena; bind root signature; dispatch camera_view.hlsl
+Renderer::RecordTrace           UAV barriers on the outputs; SceneGpu::UpdateFrame writes instance, material, and emitter
+                                tables into the arena and rebuilds the TLAS only when a transform revision changed;
+                                diagnostic dispatch, or N path-tracer dispatches (reference) with accumulation resets
 Renderer::RecordCopyToBackBuffer display texture UAV->COPY_SOURCE, back buffer PRESENT->COPY_DEST, CopyResource, back
 Renderer::EndFrame              resolve timestamps, close, ExecuteCommandLists, fence signal
 SwapChain::Present              vsync on/off; DXGI_ERROR_DEVICE_REMOVED triggers the DRED report and exit 1
-Scene::CommitRenderedFrame      previous transforms := current (motion history refers to rendered images)
+Scene::CommitRenderedFrame      previous transforms := the transforms just rendered (motion history refers to images)
 ```
+
+Poses are interpolated by parameters (position, yaw, pitch, door angle), never by matrices, and
+placement events (lamp put on a socket) reset the interpolation so a discrete move does not sweep.
+Live play pauses the simulation while the cursor is released (Escape) or the window lacks focus:
+no ticks run and no catch-up burst follows. Replay is deterministic: the same file gives the same
+world state at every tick on any machine (CPU tests run the committed replays without a GPU).
 
 ## Lifetimes and synchronization
 
@@ -75,5 +85,5 @@ any error-severity message.
 
 ## Not yet present
 
-Materials, emitters, the path integrator, denoising, input, simulation, audio, scene files, and
-the game layer. `docs/STATUS.md` names the next task.
+Collision (M5), denoising and reconstruction (M4), audio (M5), scene files (M3.5), the objective
+and threat state machines (M5), the six-room level (M6). `docs/STATUS.md` names the next task.

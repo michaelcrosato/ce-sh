@@ -6,6 +6,9 @@
 #include "core/error.h"
 #include "core/json_writer.h"
 #include "core/log.h"
+#include "game/replay.h"
+#include "game/simulation.h"
+#include "game/world.h"
 #include "graphics/d3d12/device.h"
 #include "graphics/d3d12/graphics_queue.h"
 #include "graphics/d3d12/swap_chain.h"
@@ -14,6 +17,7 @@
 #include "render/capture.h"
 #include "render/renderer.h"
 #include "scene/builtin_scenes.h"
+#include "scene/two_room_level.h"
 
 #include <algorithm>
 #include <chrono>
@@ -92,7 +96,87 @@ PixelPoint ProjectPoint(const Camera& camera, std::uint32_t width, std::uint32_t
     return p;
 }
 
+PixelPoint PixelFromUv(std::uint32_t width, std::uint32_t height, float u, float v) {
+    PixelPoint p;
+    p.x = std::min(width - 1, static_cast<std::uint32_t>(std::clamp(u, 0.0f, 1.0f) * static_cast<float>(width)));
+    p.y = std::min(height - 1, static_cast<std::uint32_t>(std::clamp(v, 0.0f, 1.0f) * static_cast<float>(height)));
+    p.visible = true;
+    return p;
+}
+
 double ChannelAverage(const double v[3]) { return (v[0] + v[1] + v[2]) / 3.0; }
+double Luminance(const double v[3]) { return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; }
+
+// Live input to a simulation tick. Mouse deltas are consumed by the first tick of a frame.
+game::InputFrame InputFromWindow(const Window& window, float sensitivity, bool consumeEdges) {
+    const RawInputState& raw = window.Input();
+    game::InputFrame f;
+    if (raw.keyDown['W']) f.moveZ += 1.0f;
+    if (raw.keyDown['S']) f.moveZ -= 1.0f;
+    if (raw.keyDown['D']) f.moveX += 1.0f;
+    if (raw.keyDown['A']) f.moveX -= 1.0f;
+    f.sprint = raw.keyDown[VK_SHIFT];
+    if (consumeEdges) {
+        f.lookDx = -raw.mouseDx * sensitivity;  // Mouse right turns right (toward +X at yaw 0).
+        f.lookDy = -raw.mouseDy * sensitivity;  // Mouse up looks up.
+        f.interactPressed = raw.keyPressed['E'];
+        f.lampPressed = raw.keyPressed['F'];
+    }
+    return f;
+}
+
+// Evaluates one radiance-style expectation on the readback. Returns the pass/fail and a detail line.
+bool EvaluateRadianceExpectation(const RadianceExpectation& r, const Camera& camera, const CaptureImages& images, std::string& detail) {
+    switch (r.kind) {
+        case RadianceExpectation::Kind::ZeroImage: {
+            float maxAbs = 0.0f;
+            for (const float v : images.linear.pixels) maxAbs = std::max(maxAbs, std::fabs(v));
+            detail = std::format("max |radiance| {:.3e} (tolerance {:.1e})", maxAbs, r.absoluteTolerance);
+            return maxAbs <= r.absoluteTolerance;
+        }
+        case RadianceExpectation::Kind::PositivePatch: {
+            const PixelPoint p = ProjectPoint(camera, images.width, images.height, r.point);
+            if (!p.visible) {
+                detail = "patch is not on screen";
+                return false;
+            }
+            const PatchStats s = ComputePatchStats(images, p.x, p.y, r.halfSize);
+            const double lum = Luminance(s.mean);
+            detail = std::format("pixel ({}, {}) mean luminance {:.5f} (minimum {:.1e})", p.x, p.y, lum, r.minimum);
+            return lum > r.minimum;
+        }
+        case RadianceExpectation::Kind::AnalyticPatch: {
+            const PixelPoint p = ProjectPoint(camera, images.width, images.height, r.point);
+            if (!p.visible) {
+                detail = "patch is not on screen";
+                return false;
+            }
+            const PatchStats s = ComputePatchStats(images, p.x, p.y, r.halfSize);
+            const double mean = ChannelAverage(s.mean);
+            const double se = ChannelAverage(s.standardError);
+            const double tolerance = std::max(static_cast<double>(r.relativeTolerance) * r.expected, 3.0 * se);
+            detail = std::format("pixel ({}, {}) mean {:.5f} expected {:.5f} (diff {:+.2f} %, se {:.2e}, tolerance {:.5f})", p.x, p.y, mean,
+                                 r.expected, (mean - r.expected) / r.expected * 100.0, se, tolerance);
+            return std::fabs(mean - r.expected) <= tolerance;
+        }
+        case RadianceExpectation::Kind::RatioGreaterThan: {
+            const PixelPoint a = ProjectPoint(camera, images.width, images.height, r.point);
+            const PixelPoint b = ProjectPoint(camera, images.width, images.height, r.otherPoint);
+            if (!a.visible || !b.visible) {
+                detail = "a patch is not on screen";
+                return false;
+            }
+            const PatchStats sa = ComputePatchStats(images, a.x, a.y, r.halfSize);
+            const PatchStats sb = ComputePatchStats(images, b.x, b.y, r.halfSize);
+            const double ra = sa.mean[0] / std::max(1e-6, sa.mean[1] + sa.mean[2]);
+            const double rb = sb.mean[0] / std::max(1e-6, sb.mean[1] + sb.mean[2]);
+            detail = std::format("R/(G+B) {:.4f} vs {:.4f} (required factor {:.2f})", ra, rb, r.ratioFactor);
+            return ra > r.ratioFactor * rb;
+        }
+    }
+    detail = "unknown expectation kind";
+    return false;
+}
 
 }  // namespace
 
@@ -137,15 +221,44 @@ int Application::RunListAdapters() {
 
 int Application::RunRender() {
     // Scene first: a bad scene name is a usage error and needs no GPU.
-    std::optional<SceneDescription> desc = BuildBuiltinScene(options_.scene);
-    if (!desc) {
-        std::string names;
-        for (const std::string& n : BuiltinSceneNames()) names += (names.empty() ? "" : ", ") + n;
-        log::Error("unknown scene '{}'; built-in scenes: {}", options_.scene, names);
-        return kExitUsage;
+    const bool simulated = options_.play || options_.replay.has_value();
+    std::optional<SceneDescription> staticDesc;
+    std::unique_ptr<game::World> world;
+    std::optional<game::Replay> replay;
+    game::Replay recording;
+    if (simulated) {
+        if (options_.scene != "two_room") {
+            log::Error("--play and --replay drive the 'two_room' scene; got '{}'", options_.scene);
+            return kExitUsage;
+        }
+        if (options_.replay) {
+            std::string error;
+            replay = game::Replay::Load(*options_.replay, error);
+            if (!replay) {
+                log::Error("{}", error);
+                return kExitUsage;
+            }
+            if (!replay->scene.empty() && replay->scene != options_.scene) {
+                log::Error("replay '{}' was recorded for scene '{}', not '{}'", options_.replay->string(), replay->scene, options_.scene);
+                return kExitUsage;
+            }
+        }
+        world = std::make_unique<game::World>(BuildTwoRoomLevel());
+        recording.scene = options_.scene;
+        recording.seed = options_.seed;
+    } else {
+        staticDesc = BuildBuiltinScene(options_.scene);
+        if (!staticDesc) {
+            std::string names;
+            for (const std::string& n : BuiltinSceneNames()) names += (names.empty() ? "" : ", ") + n;
+            log::Error("unknown scene '{}'; built-in scenes: {}", options_.scene, names);
+            return kExitUsage;
+        }
+        staticDesc->camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
     }
-    desc->camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
     const RenderMode mode = ToRenderMode(options_.mode);
+    Scene& scene = world ? world->GetScene() : staticDesc->scene;
+    const std::string sceneName = world ? world->Level().description.name : staticDesc->name;
 
     // Device.
     gfx::DeviceOptions deviceOptions;
@@ -181,17 +294,21 @@ int Application::RunRender() {
                                                                      : std::format("{}", RenderModeName(mode));
         if (!options_.headless) {
             WindowDesc wd;
-            wd.title = std::format(L"Last Circuit [{}] {}", Utf8ToWide(modeLabel), Utf8ToWide(options_.scene));
+            wd.title = std::format(L"Last Circuit [{}] {}", Utf8ToWide(modeLabel), Utf8ToWide(sceneName));
             wd.clientWidth = options_.width;
             wd.clientHeight = options_.height;
             window = std::make_unique<Window>(wd);
             swapChain = std::make_unique<gfx::SwapChain>(*device, queue, window->Handle(), window->ClientWidth(), window->ClientHeight(), options_.vsync);
+            if (options_.play) {
+                window->EnableRawMouse();
+                window->CaptureCursor(true);
+            }
         }
 
         const std::uint32_t initialWidth = window ? window->ClientWidth() : options_.width;
         const std::uint32_t initialHeight = window ? window->ClientHeight() : options_.height;
         Renderer renderer(*device, queue, initialWidth, initialHeight);
-        renderer.SetScene(desc->scene);
+        renderer.SetScene(scene);
         renderer.SetMode(mode);
         IntegratorSettings integrator;
         integrator.maxHits = options_.maxHits;
@@ -203,6 +320,19 @@ int Application::RunRender() {
         integrator.targetSamples = mode == RenderMode::Reference ? options_.spp : 0;
         renderer.SetIntegrator(integrator);
 
+        // Simulation setup.
+        game::Simulation simulation(replay ? replay->tickRate : 60);
+        const bool frozenReplay = replay && options_.stopAtTick >= 0;
+        if (world && frozenReplay) {
+            const auto stopTick = static_cast<std::uint32_t>(options_.stopAtTick);
+            simulation.RunTicks(stopTick, [&](std::uint64_t tick, float dt) { world->Tick(replay->InputAt(tick), dt); });
+            log::Info("replay '{}': advanced {} ticks; door {}, lamp {} ({}), threat at ({:.2f}, {:.2f}, {:.2f}), player at ({:.2f}, {:.2f}, {:.2f})",
+                      options_.replay->string(), stopTick, game::DoorStateName(world->GetDoor().State()),
+                      world->GetLamp().IsOn() ? "on" : "off", world->GetLamp().State() == game::LampState::Held ? "held" : world->GetLamp().SocketName(),
+                      world->GetThreat().Current().position.x, world->GetThreat().Current().position.y, world->GetThreat().Current().position.z,
+                      world->GetPlayer().Current().position.x, world->GetPlayer().Current().position.y, world->GetPlayer().Current().position.z);
+        }
+
         std::uint32_t targetFrames = options_.frames;
         if (targetFrames == 0 && options_.headless && mode != RenderMode::Reference) {
             targetFrames = options_.validate ? 2 : 1;
@@ -210,40 +340,60 @@ int Application::RunRender() {
         if (options_.resizeTest) {
             targetFrames = kFramesPerResizeStep * (static_cast<std::uint32_t>(std::size(kResizeSteps)) + 1);
         }
+        if (replay && !frozenReplay && targetFrames == 0 && options_.headless) {
+            targetFrames = static_cast<std::uint32_t>(replay->LastTick() + 1);
+        }
         const bool stopAtTarget = mode == RenderMode::Reference && (options_.headless || options_.validate || options_.capture || options_.stats);
-        log::Info("Rendering scene '{}' mode {}{} at {}x{}{}{}{}", desc->name, RenderModeName(mode),
+        log::Info("Rendering scene '{}' mode {}{} at {}x{}{}{}{}{}", sceneName, RenderModeName(mode),
                   mode == RenderMode::Diagnostic ? std::format(" view '{}'", ViewModeName(options_.view))
                                                  : std::format(" strategy {} max-hits {} seed {}", StrategyName(integrator.strategy), integrator.maxHits, integrator.seed),
                   initialWidth, initialHeight, options_.headless ? " (headless)" : "",
                   targetFrames ? std::format(" for {} frames", targetFrames) : "",
-                  mode == RenderMode::Reference ? std::format(" until {} spp", options_.spp) : "");
-        if (mode != RenderMode::Diagnostic) {
-            log::Info("Emitters: {} active; exposure {}; jitter {}", renderer.SceneData() ? "(computed per frame)" : "none", integrator.exposure,
-                      integrator.jitter ? "on" : "off");
-        }
+                  mode == RenderMode::Reference ? std::format(" until {} spp", options_.spp) : "",
+                  world ? (options_.play ? " [live play]" : frozenReplay ? " [replay, frozen]" : " [replay, one tick per frame]") : "");
 
         std::uint32_t frameIndex = 0;
         std::uint32_t resizeStep = 0;
         bool resizeTestPassed = options_.resizeTest;
         bool deviceRemoved = false;
         bool aborted = false;
+        std::uint64_t motionFrames = 0;  // Frames in which the world changed a transform.
         double cpuAccumMs = 0.0;
         std::uint32_t cpuAccumFrames = 0;
         auto lastReport = std::chrono::steady_clock::now();
+        auto lastFrameTime = std::chrono::steady_clock::now();
+        Camera camera = world ? world->CameraAt(1.0f) : staticDesc->camera;
+        camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
+        std::string lastInteraction;
 
         try {
         while (true) {
             const auto frameStart = std::chrono::steady_clock::now();
+            const double realSeconds = std::chrono::duration<double>(frameStart - lastFrameTime).count();
+            lastFrameTime = frameStart;
 
             if (window) {
                 window->PumpMessages();
                 const WindowEvents& ev = window->Events();
-                if (ev.closeRequested || ev.escapePressed) {
+                if (ev.closeRequested) {
                     log::Info("Window close requested");
                     window->ClearEvents();
                     break;
                 }
-                if (ev.focusLost) log::Debug("Focus lost");
+                if (ev.escapePressed) {
+                    if (options_.play) {
+                        window->CaptureCursor(!window->CursorCaptured());  // Escape pauses look/move by releasing the cursor.
+                        log::Info("cursor {}", window->CursorCaptured() ? "captured" : "released (Escape again to capture)");
+                    } else {
+                        log::Info("Escape pressed: closing");
+                        window->ClearEvents();
+                        break;
+                    }
+                }
+                if (ev.focusLost) {
+                    log::Debug("Focus lost");
+                    if (options_.play) window->CaptureCursor(false);
+                }
                 if (ev.focusGained) log::Debug("Focus gained");
                 if (ev.resized || swapChain->Width() != window->ClientWidth() || swapChain->Height() != window->ClientHeight()) {
                     if (!window->IsMinimized() && window->ClientWidth() > 0 && window->ClientHeight() > 0) {
@@ -254,13 +404,50 @@ int Application::RunRender() {
                 window->ClearEvents();
                 if (window->IsMinimized() || window->ClientWidth() == 0 || window->ClientHeight() == 0) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Never render to a zero-sized target.
+                    if (window) window->ClearInput();
                     continue;
                 }
             }
 
+            // Simulation (spec §9 order: input, fixed-step ticks, interpolated render data).
+            float alpha = 1.0f;
+            bool worldChanged = false;
+            if (world) {
+                if (options_.play) {
+                    const bool active = window && window->CursorCaptured() && window->HasFocus();
+                    if (active) {
+                        bool first = true;
+                        const auto step = simulation.Advance(realSeconds, [&](std::uint64_t tick, float dt) {
+                            const game::InputFrame input = InputFromWindow(*window, options_.mouseSensitivity, first);
+                            first = false;
+                            world->Tick(input, dt);
+                            if (options_.record) recording.Record(tick, input);
+                        });
+                        alpha = step.alpha;
+                        if (step.clamped) log::Warn("simulation clamped a long frame ({:.3f} s)", realSeconds);
+                    } else {
+                        (void)simulation.Advance(0.0, [](std::uint64_t, float) {});  // Paused: no ticks, no catch-up.
+                    }
+                    if (window) window->ClearInput();
+                    const auto target = world->CurrentInteraction();
+                    const std::string targetName = target ? target->name : "";
+                    if (targetName != lastInteraction) {
+                        if (!targetName.empty()) log::Info("[E] {}", targetName);
+                        lastInteraction = targetName;
+                    }
+                } else if (!frozenReplay) {
+                    simulation.RunTicks(1, [&](std::uint64_t tick, float dt) { world->Tick(replay->InputAt(tick), dt); });
+                    alpha = 1.0f;
+                }
+                worldChanged = world->WriteRenderScene(scene, alpha);
+                if (worldChanged) ++motionFrames;
+                camera = world->CameraAt(alpha);
+                camera.horizontalFovRadians = math::DegreesToRadians(options_.horizontalFovDegrees);
+            }
+
             RenderSnapshot snapshot;
-            snapshot.scene = &desc->scene;
-            snapshot.camera = desc->camera;
+            snapshot.scene = &scene;
+            snapshot.camera = camera;
             snapshot.frameIndex = frameIndex;
             snapshot.view = options_.view;
 
@@ -279,7 +466,7 @@ int Application::RunRender() {
                 }
                 LC_CHECK_HR(hr);
             }
-            desc->scene.CommitRenderedFrame();
+            scene.CommitRenderedFrame();
             ++frameIndex;
 
             const double cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count();
@@ -289,13 +476,20 @@ int Application::RunRender() {
             const bool targetReached = stopAtTarget && renderer.SampleIndex() >= options_.spp;
             if (now - lastReport >= std::chrono::seconds(2) || (targetFrames != 0 && frameIndex == targetFrames) || targetReached) {
                 const double avgCpu = cpuAccumFrames ? cpuAccumMs / cpuAccumFrames : 0.0;
-                log::Info("frame {}: CPU {:.3f} ms avg over {} frames | GPU {}{}", frameIndex, avgCpu, cpuAccumFrames, TimingsText(renderer.LastTimings()),
-                          mode == RenderMode::Reference ? std::format(" | {} spp accumulated", renderer.SampleIndex()) : "");
+                log::Info("frame {}: CPU {:.3f} ms avg over {} frames | GPU {}{}{}", frameIndex, avgCpu, cpuAccumFrames, TimingsText(renderer.LastTimings()),
+                          mode == RenderMode::Reference ? std::format(" | {} spp accumulated", renderer.SampleIndex()) : "",
+                          world ? std::format(" | tick {} door {} lamp {} TLAS rebuilds {}", simulation.Tick(), game::DoorStateName(world->GetDoor().State()),
+                                              world->GetLamp().IsOn() ? "on" : "off", renderer.TlasRebuildCount())
+                                : "");
                 if (window) {
-                    window->SetTitle(std::format(L"Last Circuit [{}] {} {}x{} | GPU frame {:.2f} ms | CPU {:.2f} ms | {} spp",
-                                                 Utf8ToWide(modeLabel), Utf8ToWide(desc->name), renderer.Width(), renderer.Height(),
+                    window->SetTitle(std::format(L"Last Circuit [{}] {} {}x{} | GPU frame {:.2f} ms | CPU {:.2f} ms | {} spp{}",
+                                                 Utf8ToWide(modeLabel), Utf8ToWide(sceneName), renderer.Width(), renderer.Height(),
                                                  FindTiming(renderer.LastTimings(), "frame_gpu"), avgCpu,
-                                                 mode == RenderMode::Diagnostic ? 0u : std::max<std::uint32_t>(1, renderer.SampleIndex())));
+                                                 mode == RenderMode::Diagnostic ? 0u : std::max<std::uint32_t>(1, renderer.SampleIndex()),
+                                                 world ? std::format(L" | tick {} | door {} | lamp {}", simulation.Tick(),
+                                                                     Utf8ToWide(game::DoorStateName(world->GetDoor().State())),
+                                                                     world->GetLamp().IsOn() ? L"on" : L"off")
+                                                       : L""));
                 }
                 cpuAccumMs = 0.0;
                 cpuAccumFrames = 0;
@@ -339,6 +533,17 @@ int Application::RunRender() {
             }
         }
 
+        if (window && options_.play) {
+            window->CaptureCursor(false);
+        }
+        if (options_.record && !aborted) {
+            if (recording.Save(*options_.record)) {
+                log::Info("Replay recorded: {} ({} segments, {} ticks)", options_.record->string(), recording.segments.size(), simulation.Tick());
+            } else {
+                exitCode = kExitFailure;
+            }
+        }
+
         if (aborted || deviceRemoved) {
             queue.DrainForShutdown();
             exitCode = kExitFailure;
@@ -346,6 +551,9 @@ int Application::RunRender() {
             queue.WaitIdle();
             renderer.CollectFinalTimings();
             log::Info("final frame GPU timings: {}", TimingsText(renderer.LastTimings()));
+            if (world) {
+                log::Info("motion frames {} of {}; TLAS rebuilds {}", motionFrames, frameIndex, renderer.TlasRebuildCount());
+            }
 
             std::optional<CaptureImages> images;
             if (options_.capture || options_.validate || options_.stats) {
@@ -354,7 +562,7 @@ int Application::RunRender() {
 
             if (options_.capture && images) {
                 CaptureMetadata meta;
-                meta.scene = desc->name;
+                meta.scene = sceneName;
                 meta.view = mode == RenderMode::Diagnostic ? std::string(ViewModeName(options_.view)) : std::string(RenderModeName(mode));
                 meta.mode = RenderModeName(mode);
                 meta.strategy = StrategyName(integrator.strategy);
@@ -377,27 +585,30 @@ int Application::RunRender() {
                 meta.triangleInstances = renderer.SceneData() ? renderer.SceneData()->TriangleCount() : 0;
                 meta.emitterCount = renderer.SceneData() ? renderer.SceneData()->EmitterCount() : 0;
                 meta.timings = renderer.LastTimings();
+                const std::string tickSuffix = world ? std::format("_tick{}", simulation.Tick()) : "";
                 const std::string base = mode == RenderMode::Diagnostic
-                                             ? std::format("{}_{}_f{}", desc->name, meta.view, meta.frameIndex)
-                                             : std::format("{}_{}_{}_spp{}", desc->name, RenderModeName(mode), StrategyName(integrator.strategy), images->sampleCount);
+                                             ? std::format("{}{}_{}_f{}", sceneName, tickSuffix, meta.view, meta.frameIndex)
+                                             : std::format("{}{}_{}_{}_spp{}", sceneName, tickSuffix, RenderModeName(mode), StrategyName(integrator.strategy), images->sampleCount);
                 if (!WriteCapture(*options_.capture, base, *images, meta)) {
                     exitCode = kExitFailure;
                 }
             }
 
+            const std::vector<StatsPatch>& statsPatches = world ? world->Level().description.statsPatches : staticDesc->statsPatches;
             if (options_.stats && images) {
                 JsonWriter j;
                 j.BeginObject();
-                j.Field("scene", desc->name);
+                j.Field("scene", sceneName);
                 j.Field("mode", RenderModeName(mode));
                 j.Field("strategy", StrategyName(integrator.strategy));
                 j.Field("maxHits", integrator.maxHits);
                 j.Field("seed", integrator.seed);
                 j.Field("samplesPerPixel", images->sampleCount);
+                if (world) j.Field("tick", static_cast<std::uint64_t>(simulation.Tick()));
                 j.Key("patches");
                 j.BeginObject();
-                for (const StatsPatch& patch : desc->statsPatches) {
-                    const PixelPoint p = ProjectPoint(desc->camera, images->width, images->height, patch.point);
+                for (const StatsPatch& patch : statsPatches) {
+                    const PixelPoint p = ProjectPoint(camera, images->width, images->height, patch.point);
                     j.Key(patch.name);
                     j.BeginObject();
                     j.Field("visible", p.visible);
@@ -441,23 +652,22 @@ int Application::RunRender() {
                 }
                 log::Info("layout probe: {}/{} fields match", probeOk, probe.size());
 
-                for (const HitExpectation& e : desc->expectations) {
-                    std::uint32_t x = 0;
-                    std::uint32_t y = 0;
+                // Static hit expectations (diagnostic scenes and the static two_room description).
+                const std::vector<HitExpectation> noHits;
+                const std::vector<HitExpectation>& hitExpectations = world ? noHits : staticDesc->expectations;
+                for (const HitExpectation& e : hitExpectations) {
+                    PixelPoint p;
                     if (e.worldPoint) {
-                        const PixelPoint p = ProjectPoint(desc->camera, images->width, images->height, *e.worldPoint);
+                        p = ProjectPoint(camera, images->width, images->height, *e.worldPoint);
                         if (!p.visible) {
                             log::Error("expectation '{}': point is not on screen", e.description);
                             ++problems;
                             continue;
                         }
-                        x = p.x;
-                        y = p.y;
                     } else {
-                        x = std::min(images->width - 1, static_cast<std::uint32_t>(e.u * static_cast<float>(images->width)));
-                        y = std::min(images->height - 1, static_cast<std::uint32_t>(e.v * static_cast<float>(images->height)));
+                        p = PixelFromUv(images->width, images->height, e.u, e.v);
                     }
-                    const gpu::HitInfoTexel& t = images->HitAt(x, y);
+                    const gpu::HitInfoTexel& t = images->HitAt(p.x, p.y);
                     const bool frontFace = (t.flags & gpu::kHitFlagFrontFace) != 0;
                     bool ok = true;
                     if (e.expectedStableId == 0) {
@@ -465,7 +675,7 @@ int Application::RunRender() {
                     } else {
                         ok = t.stableId == e.expectedStableId && (e.worldPoint || frontFace == e.expectFrontFace);
                     }
-                    log::Info("expectation '{}' at pixel ({}, {}): stable id {}{} front {} -> {}", e.description, x, y,
+                    log::Info("expectation '{}' at pixel ({}, {}): stable id {}{} front {} -> {}", e.description, p.x, p.y,
                               t.stableId == gpu::kMissId ? std::string("miss") : std::to_string(t.stableId),
                               mode == RenderMode::Diagnostic ? "" : std::format(" after {} mirror bounce(s)", t.instanceIndex),
                               frontFace ? "yes" : "no", ok ? "PASS" : "FAIL");
@@ -505,62 +715,89 @@ int Application::RunRender() {
                         log::Error("the integrator produced invalid values");
                         ++problems;
                     }
-                    for (const RadianceExpectation& r : desc->radianceExpectations) {
-                        bool ok = false;
+                    const std::vector<RadianceExpectation> none;
+                    const std::vector<RadianceExpectation>& radianceExpectations = world ? none : staticDesc->radianceExpectations;
+                    for (const RadianceExpectation& r : radianceExpectations) {
                         std::string detail;
-                        switch (r.kind) {
-                            case RadianceExpectation::Kind::ZeroImage: {
-                                float maxAbs = 0.0f;
-                                for (const float v : images->linear.pixels) maxAbs = std::max(maxAbs, std::fabs(v));
-                                ok = maxAbs <= r.absoluteTolerance;
-                                detail = std::format("max |radiance| {:.3e} (tolerance {:.1e})", maxAbs, r.absoluteTolerance);
-                                break;
-                            }
-                            case RadianceExpectation::Kind::PositivePatch: {
-                                const PixelPoint p = ProjectPoint(desc->camera, images->width, images->height, r.point);
-                                if (!p.visible) {
-                                    detail = "patch is not on screen";
-                                    break;
-                                }
-                                const PatchStats s = ComputePatchStats(*images, p.x, p.y, r.halfSize);
-                                const double lum = 0.2126 * s.mean[0] + 0.7152 * s.mean[1] + 0.0722 * s.mean[2];
-                                ok = lum > r.minimum;
-                                detail = std::format("pixel ({}, {}) mean luminance {:.5f} (minimum {:.1e})", p.x, p.y, lum, r.minimum);
-                                break;
-                            }
-                            case RadianceExpectation::Kind::AnalyticPatch: {
-                                const PixelPoint p = ProjectPoint(desc->camera, images->width, images->height, r.point);
-                                if (!p.visible) {
-                                    detail = "patch is not on screen";
-                                    break;
-                                }
-                                const PatchStats s = ComputePatchStats(*images, p.x, p.y, r.halfSize);
-                                const double mean = ChannelAverage(s.mean);
-                                const double se = ChannelAverage(s.standardError);
-                                const double tolerance = std::max(static_cast<double>(r.relativeTolerance) * r.expected, 3.0 * se);
-                                ok = std::fabs(mean - r.expected) <= tolerance;
-                                detail = std::format("pixel ({}, {}) mean {:.5f} expected {:.5f} (diff {:+.2f} %, se {:.2e}, tolerance {:.5f})", p.x, p.y, mean,
-                                                     r.expected, (mean - r.expected) / r.expected * 100.0, se, tolerance);
-                                break;
-                            }
-                            case RadianceExpectation::Kind::RatioGreaterThan: {
-                                const PixelPoint a = ProjectPoint(desc->camera, images->width, images->height, r.point);
-                                const PixelPoint b = ProjectPoint(desc->camera, images->width, images->height, r.otherPoint);
-                                if (!a.visible || !b.visible) {
-                                    detail = "a patch is not on screen";
-                                    break;
-                                }
-                                const PatchStats sa = ComputePatchStats(*images, a.x, a.y, r.halfSize);
-                                const PatchStats sb = ComputePatchStats(*images, b.x, b.y, r.halfSize);
-                                const double ra = sa.mean[0] / std::max(1e-6, sa.mean[1] + sa.mean[2]);
-                                const double rb = sb.mean[0] / std::max(1e-6, sb.mean[1] + sb.mean[2]);
-                                ok = ra > r.ratioFactor * rb;
-                                detail = std::format("R/(G+B) {:.4f} vs {:.4f} (required factor {:.2f})", ra, rb, r.ratioFactor);
-                                break;
-                            }
-                        }
+                        const bool ok = EvaluateRadianceExpectation(r, camera, *images, detail);
                         log::Info("radiance expectation '{}': {} -> {}", r.description, detail, ok ? "PASS" : "FAIL");
                         if (!ok) ++problems;
+                    }
+                }
+
+                // Replay checks at the stop tick.
+                if (world && replay) {
+                    const std::uint64_t tick = simulation.Tick();
+                    int evaluated = 0;
+                    for (const game::ReplayCheck& c : replay->checks) {
+                        if (c.tick != tick) continue;
+                        ++evaluated;
+                        bool ok = false;
+                        std::string detail;
+                        PixelPoint p;
+                        if (c.point) {
+                            p = ProjectPoint(camera, images->width, images->height, *c.point);
+                        } else if (c.pixel) {
+                            p = PixelFromUv(images->width, images->height, c.pixel->x, c.pixel->y);
+                        }
+                        if (c.kind == "hit") {
+                            const std::uint32_t expected = world->StableIdOf(c.entity);
+                            if (!p.visible) {
+                                detail = "point is not on screen";
+                            } else if (expected == 0) {
+                                detail = std::format("unknown entity '{}'", c.entity);
+                            } else {
+                                const gpu::HitInfoTexel& t = images->HitAt(p.x, p.y);
+                                ok = t.stableId == expected;
+                                detail = std::format("pixel ({}, {}) first non-mirror hit id {} after {} mirror bounce(s); expected {} ('{}')", p.x, p.y,
+                                                     t.stableId == gpu::kMissId ? std::string("miss") : std::to_string(t.stableId), t.instanceIndex, expected, c.entity);
+                            }
+                        } else if (c.kind == "not_visible") {
+                            const std::uint32_t id = world->StableIdOf(c.entity);
+                            std::uint64_t direct = 0;
+                            for (const gpu::HitInfoTexel& t : images->hitInfo) {
+                                if (t.stableId == id && t.instanceIndex == 0) ++direct;  // Zero mirror bounces = seen directly.
+                            }
+                            ok = id != 0 && direct == 0;
+                            detail = std::format("'{}' (id {}) appears directly in {} pixel(s)", c.entity, id, direct);
+                        } else {
+                            RadianceExpectation r;
+                            r.description = c.description;
+                            r.point = c.point.value_or(math::Vec3{});
+                            r.otherPoint = c.otherPoint.value_or(math::Vec3{});
+                            r.halfSize = c.halfSize;
+                            r.minimum = c.minimum;
+                            r.absoluteTolerance = c.tolerance;
+                            r.ratioFactor = c.ratioFactor;
+                            if (c.kind == "patch_positive") {
+                                r.kind = RadianceExpectation::Kind::PositivePatch;
+                                ok = EvaluateRadianceExpectation(r, camera, *images, detail);
+                            } else if (c.kind == "patch_dark") {
+                                if (!p.visible) {
+                                    detail = "patch is not on screen";
+                                } else {
+                                    const PatchStats s = ComputePatchStats(*images, p.x, p.y, c.halfSize);
+                                    const double lum = Luminance(s.mean);
+                                    ok = lum < c.maximum;
+                                    detail = std::format("pixel ({}, {}) mean luminance {:.5f} (maximum {:.1e})", p.x, p.y, lum, c.maximum);
+                                }
+                            } else if (c.kind == "patch_zero") {
+                                r.kind = RadianceExpectation::Kind::ZeroImage;
+                                ok = EvaluateRadianceExpectation(r, camera, *images, detail);
+                            } else if (c.kind == "patch_ratio") {
+                                r.kind = RadianceExpectation::Kind::RatioGreaterThan;
+                                ok = EvaluateRadianceExpectation(r, camera, *images, detail);
+                            } else {
+                                detail = "unknown check kind";
+                            }
+                        }
+                        log::Info("replay check tick {} '{}' ({}): {} -> {}", c.tick, c.description, c.kind, detail, ok ? "PASS" : "FAIL");
+                        if (!ok) ++problems;
+                    }
+                    log::Info("replay checks evaluated at tick {}: {} (others skipped: {})", tick, evaluated, replay->checks.size() - evaluated);
+                    if (!frozenReplay && motionFrames + 1 != renderer.TlasRebuildCount() && motionFrames != renderer.TlasRebuildCount()) {
+                        log::Error("TLAS rebuilt {} times but the world changed transforms in {} frames", renderer.TlasRebuildCount(), motionFrames);
+                        ++problems;
                     }
                 }
 
@@ -571,8 +808,7 @@ int Application::RunRender() {
                 problems += static_cast<int>(errors);
 
                 if (problems == 0) {
-                    log::Info("VALIDATION PASSED ({} hit expectations, {} radiance expectations, {} layout fields, {} spp)", desc->expectations.size(),
-                              desc->radianceExpectations.size(), probe.size(), images->sampleCount);
+                    log::Info("VALIDATION PASSED ({} layout fields, {} spp)", probe.size(), images->sampleCount);
                     std::printf("VALIDATION PASSED\n");
                 } else {
                     log::Error("VALIDATION FAILED: {} problem(s)", problems);

@@ -120,6 +120,28 @@ Format: date, issue, evidence, decision, consequence, rollback.
 - Decision: `OffsetRayTri` adds 256 ULP of the largest vertex coordinate of the hit (or sampled) triangle along the normal. Sealed-room tests confirm no leaks with the larger offsets on 4 m slabs.
 - Rollback: none needed; a future per-triangle error bound from the intersection algorithm could replace the heuristic.
 
+## D-023 (2026-09-06) In-house strict JSON reader
+
+- Decision: a small RFC 8259 parser in `lc_core` (no comments, no trailing commas, depth 64, line/column errors) serves replay files now and scene files next, keeping the dependency set empty.
+- Rollback: pin nlohmann/json if the scene format outgrows it.
+
+## D-024 (2026-09-06) Poses interpolated by parameters; history from rendered frames
+
+- Decision: entities keep previous and current tick poses (position, yaw, pitch, door angle) and the render transform is built from the interpolated parameters; `Scene::CommitRenderedFrame` records the rendered transform as the previous one (spec §9). Placement events reset interpolation.
+
+## D-025 (2026-09-06) Replay-driven tests with per-tick checks
+
+- Decision: T05/T06 are replays with checks evaluated at a stop tick in a fresh process per check (reference mode for radiance, raw for identities). The committed replays are also run on the CPU by the unit tests, which verify poses and mirror facts before the GPU is involved.
+- Consequence: a failing GPU replay test isolates the renderer, because the CPU test already proved the world state.
+
+## D-026 (2026-09-06) Collision deferred to M5; interaction by view alignment
+
+- Decision: the M3 controller has no collision (spec places collision in M5); interaction picks the candidate within 2 m that is closest to the view direction (cosine >= 0.6), so looking down at the lamp chooses it over the door.
+
+## D-027 (2026-09-06) Light levels of the proof scene
+
+- Decision: Room B's fixture is on an off circuit so the portable lamp is the dominant change there; the hall emergency fixture carries about a third of Room A's fixture power so the mirror image stays readable; the lamp face is small and bright (about a tenth of Room A's fixture power). Evidence captures of the dark rooms use `--exposure` 2..6 (display only; radiance checks read the linear image).
+
 ## D-013 (2026-09-06) Repository workflow for this session
 
 - Decision: work on branch `m0-m1-bootstrap` with small commits; nothing is pushed; `build/` and `artifacts/` are ignored. The owner decides on merging.

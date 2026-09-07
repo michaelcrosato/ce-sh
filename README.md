@@ -9,12 +9,14 @@ instructions for coding agents are in [`AGENTS.md`](AGENTS.md).
 
 ## Status
 
-Milestones M0 (environment and build), M1 (hardware geometry), and M2 (raw light transport) are
-complete on the recorded machine: an RTX 4070 SUPER runs a small path tracer with next-event
-estimation, multiple importance sampling, one-sided area emitters, and ideal mirrors, checked
-against closed-form irradiance, sealed-room zero tests, estimator cross-agreement, and mirror
-identity tests. The moving two-room scene (M3) is next. Details, evidence labels, and the next
-task: [`docs/STATUS.md`](docs/STATUS.md).
+Milestones M0 (environment and build), M1 (hardware geometry), M2 (raw light transport), and M3
+(moving two-room scene) are complete on the recorded machine: an RTX 4070 SUPER runs a small path
+tracer with next-event estimation, multiple importance sampling, one-sided area emitters, ideal
+mirrors, and GGX conductors, checked against closed-form references and sealed-room zero tests;
+a fixed-step simulation with deterministic replays drives a first-person camera, a hinged door,
+a portable lamp fixture, and a threat that is visible only in the mirror. Stable real-time
+reconstruction (M4) is next. Details, evidence labels, and the next task:
+[`docs/STATUS.md`](docs/STATUS.md).
 
 ## Quick start
 
@@ -23,6 +25,7 @@ task: [`docs/STATUS.md`](docs/STATUS.md).
 cmake --preset windows-debug
 cmake --build --preset windows-debug
 ctest --preset windows-debug --output-on-failure
+.\build\windows-debug\bin\LastCircuit.exe --scene two_room --play --exposure 4 # walk the two-room proof (WASD, mouse, E, F, Escape)
 .\build\windows-debug\bin\LastCircuit.exe --scene t08_box --mode reference     # path-traced Cornell-style box
 .\build\windows-debug\bin\LastCircuit.exe --scene rt_boxes --mode diag         # M1 diagnostic normals view
 ```
