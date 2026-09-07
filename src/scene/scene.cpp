@@ -2,6 +2,7 @@
 
 #include "core/error.h"
 
+#include <algorithm>
 #include <format>
 
 namespace lc {
@@ -54,6 +55,24 @@ InstanceId Scene::AddInstance(std::string name, MeshId mesh, const math::Mat4& o
     if (nextInstanceId_ > kMaxInstanceId) {
         throw Error(std::format("instance id space exhausted (limit {})", kMaxInstanceId));
     }
+    {
+        const math::Vec3 cx{objectToWorld.m[0][0], objectToWorld.m[1][0], objectToWorld.m[2][0]};
+        const math::Vec3 cy{objectToWorld.m[0][1], objectToWorld.m[1][1], objectToWorld.m[2][1]};
+        const math::Vec3 cz{objectToWorld.m[0][2], objectToWorld.m[1][2], objectToWorld.m[2][2]};
+        const float det = math::Dot(cx, math::Cross(cy, cz));
+        if (!(det > 1e-12f)) {
+            throw Error(std::format("instance '{}' has a mirrored or degenerate transform (determinant {}); negative scale is not supported",
+                                    name, det));
+        }
+        const float lx = math::Length(cx);
+        const float ly = math::Length(cy);
+        const float lz = math::Length(cz);
+        const float lo = std::min(lx, std::min(ly, lz));
+        const float hi = std::max(lx, std::max(ly, lz));
+        if (hi - lo > 1e-4f * hi) {
+            throw Error(std::format("instance '{}' has non-uniform scale ({}, {}, {}); not supported until tested", name, lx, ly, lz));
+        }
+    }
     Instance inst;
     inst.id = InstanceId{nextInstanceId_++};
     inst.name = std::move(name);
@@ -62,6 +81,7 @@ InstanceId Scene::AddInstance(std::string name, MeshId mesh, const math::Mat4& o
     inst.objectToWorld = objectToWorld;
     inst.prevObjectToWorld = objectToWorld;
     inst.transformRevision = 0;
+    instanceIndexById_[inst.id.value] = static_cast<std::uint32_t>(instances_.size());
     instances_.push_back(std::move(inst));
     return instances_.back().id;
 }
@@ -96,21 +116,13 @@ void Scene::CommitRenderedFrame() {
 }
 
 const Instance* Scene::FindInstance(InstanceId id) const {
-    for (const Instance& inst : instances_) {
-        if (inst.id == id) {
-            return &inst;
-        }
-    }
-    return nullptr;
+    const auto it = instanceIndexById_.find(id.value);
+    return it == instanceIndexById_.end() ? nullptr : &instances_[it->second];
 }
 
 Instance* Scene::FindInstanceMutable(InstanceId id) {
-    for (Instance& inst : instances_) {
-        if (inst.id == id) {
-            return &inst;
-        }
-    }
-    return nullptr;
+    const auto it = instanceIndexById_.find(id.value);
+    return it == instanceIndexById_.end() ? nullptr : &instances_[it->second];
 }
 
 std::uint32_t Scene::TotalTriangles() const {

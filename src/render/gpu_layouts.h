@@ -82,6 +82,7 @@ static_assert(sizeof(HitInfoTexel) == 16);
 inline constexpr std::uint32_t kMissId = 0xFFFFFFFFu;
 inline constexpr std::uint32_t kHitFlagFrontFace = 1u;
 inline constexpr std::uint32_t kHitFlagGeometricFacing = 2u;
+inline constexpr std::uint32_t kHitFlagGrazing = 4u;
 
 // layout_probe.hlsl output size and trailing sentinel.
 inline constexpr std::uint32_t kLayoutProbeCount = 30;

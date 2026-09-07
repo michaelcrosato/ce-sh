@@ -1,6 +1,6 @@
 // T02 layout probe: copies selected fields of the shared GPU records into a buffer so the CPU can
 // confirm that C++ and HLSL agree on offsets, matrix element order, and array packing.
-// The CPU side (src/render/layout_probe.cpp) fills every record with known values first.
+// The CPU side (Renderer::RunLayoutProbe in src/render/renderer.cpp) fills every record with known values first.
 #include "shared/layouts.hlsli"
 
 ConstantBuffer<FrameConstants> gFrame : register(b0);

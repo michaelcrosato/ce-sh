@@ -57,6 +57,7 @@ SceneGpu::SceneGpu(gfx::Device& device, gfx::GraphicsQueue& queue, const Scene& 
     staging.push_back(gfx::UploadToDefaultBuffer(device, list.Get(), meshRecords_, AsBytes(records), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
 
     blas_.resize(scene.Meshes().size());
+    uploadedMeshCount_ = static_cast<std::uint32_t>(scene.Meshes().size());
     for (std::size_t i = 0; i < scene.Meshes().size(); ++i) {
         gfx::BlasGeometry g;
         g.vertexBuffer = positions_.Address() + static_cast<std::uint64_t>(records[i].firstVertex) * sizeof(math::Vec3);
@@ -95,7 +96,13 @@ void SceneGpu::UpdateInstances(const Scene& scene, gfx::UploadArena& arena, ID3D
         throw Error("SceneGpu: the scene has no instances");
     }
     if (count > tlas_.MaxInstances()) {
-        throw Error(std::format("SceneGpu: {} instances exceed the reserved TLAS capacity of {}", count, tlas_.MaxInstances()));
+        throw Error(std::format("SceneGpu: {} instances exceed the reserved TLAS capacity of {}; re-upload the scene (SetScene) "
+                                "after adding many instances",
+                                count, tlas_.MaxInstances()));
+    }
+    if (scene.Meshes().size() != uploadedMeshCount_) {
+        throw Error(std::format("SceneGpu: the scene now has {} meshes but {} were uploaded; call SetScene again", scene.Meshes().size(),
+                                uploadedMeshCount_));
     }
 
     bool dirty = !tlasValid_ || lastRevisions_.size() != instances.size();

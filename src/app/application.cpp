@@ -122,7 +122,7 @@ int Application::RunRender() {
         return kExitUnsupported;
     }
 
-    const EnvironmentInfo env = CollectEnvironment(gfx::Device::EnumerateAdapters(), device.get());
+    const EnvironmentInfo env = CollectEnvironment(device->AllAdapters(), device.get());
     LogEnvironment(env);
     if (options_.envReport) {
         if (files::WriteTextFile(*options_.envReport, EnvironmentToJson(env))) {
@@ -164,10 +164,12 @@ int Application::RunRender() {
         std::uint32_t resizeStep = 0;
         bool resizeTestPassed = options_.resizeTest;
         bool deviceRemoved = false;
+        bool aborted = false;
         double cpuAccumMs = 0.0;
         std::uint32_t cpuAccumFrames = 0;
         auto lastReport = std::chrono::steady_clock::now();
 
+        try {
         while (true) {
             const auto frameStart = std::chrono::steady_clock::now();
 
@@ -256,16 +258,25 @@ int Application::RunRender() {
                 }
             }
 
+            device->DrainInfoQueue();  // No-op when the message callback is active.
             if (targetFrames != 0 && frameIndex >= targetFrames) {
                 break;
             }
         }
+        } catch (const std::exception& e) {
+            log::Error("frame loop aborted after {} frames: {}", frameIndex, e.what());
+            aborted = true;
+            if (queue.IsDeviceRemoved()) {
+                device->ReportDeviceRemoved();
+                deviceRemoved = true;
+            }
+        }
 
-        queue.WaitIdle();
-
-        if (deviceRemoved) {
+        if (aborted || deviceRemoved) {
+            queue.DrainForShutdown();
             exitCode = kExitFailure;
         } else {
+            queue.WaitIdle();
             renderer.CollectFinalTimings();
             log::Info("final frame GPU timings: {}", TimingsText(renderer.LastTimings()));
             // Post-run work: capture, validation, resize verdict.
@@ -332,14 +343,20 @@ int Application::RunRender() {
 
                 std::uint64_t hits = 0;
                 std::uint64_t facingMismatches = 0;
+                std::uint64_t grazing = 0;
                 for (const gpu::HitInfoTexel& t : images->hitInfo) {
                     if (t.stableId == gpu::kMissId) continue;
                     ++hits;
+                    if ((t.flags & gpu::kHitFlagGrazing) != 0) {
+                        ++grazing;  // Facing is ill-defined at grazing incidence; excluded from the check.
+                        continue;
+                    }
                     const bool front = (t.flags & gpu::kHitFlagFrontFace) != 0;
                     const bool geometric = (t.flags & gpu::kHitFlagGeometricFacing) != 0;
                     if (front != geometric) ++facingMismatches;
                 }
-                log::Info("hit pixels: {} of {}; RayQuery facing vs geometric winding mismatches: {}", hits, images->hitInfo.size(), facingMismatches);
+                log::Info("hit pixels: {} of {}; RayQuery facing vs geometric winding mismatches: {} ({} grazing pixels excluded)", hits,
+                          images->hitInfo.size(), facingMismatches, grazing);
                 if (hits == 0) {
                     log::Error("no camera ray hit anything; the scene should be visible");
                     ++problems;

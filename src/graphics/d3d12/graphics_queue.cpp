@@ -24,12 +24,30 @@ GraphicsQueue::GraphicsQueue(Device& device) {
 }
 
 GraphicsQueue::~GraphicsQueue() {
-    if (queue_ && fence_) {
-        WaitIdle();
-    }
+    DrainForShutdown();
     if (event_ != nullptr) {
         CloseHandle(event_);
     }
+}
+
+void GraphicsQueue::DrainForShutdown() noexcept {
+    if (!queue_ || !fence_ || event_ == nullptr) {
+        return;
+    }
+    if (IsDeviceRemoved()) {
+        return;  // Nothing will ever complete; the removal is reported elsewhere.
+    }
+    const std::uint64_t value = nextValue_++;
+    if (FAILED(queue_->Signal(fence_.Get(), value))) {
+        return;
+    }
+    if (fence_->GetCompletedValue() >= value) {
+        return;
+    }
+    if (FAILED(fence_->SetEventOnCompletion(value, event_))) {
+        return;
+    }
+    WaitForSingleObject(event_, 5000);
 }
 
 void GraphicsQueue::Execute(ID3D12CommandList* list) {

@@ -1,6 +1,8 @@
 # Build-time HLSL compilation with DXC. Every shader becomes bin/shaders/<name>.cso (signed DXIL)
 # plus a <name>.pdb for PIX and debuggers. A failing compile prints the DXC diagnostics and the
 # command line, so the shader, entry point, profile, and error are all visible.
+# -Zpr makes row-major the default matrix packing for every shader, matching the
+# #pragma pack_matrix(row_major) in shaders/shared/layouts.hlsli (one explicit layout, spec §9).
 #
 # Requires: LC_DXC_EXECUTABLE, LC_SHADER_OUTPUT_DIR, LC_SHADER_HEADERS (all .hlsli files; listing
 # them all as dependencies keeps the rule simple and always correct).
@@ -19,6 +21,7 @@ function(lc_add_shader OUT_LIST SOURCE ENTRY PROFILE)
                 -E ${ENTRY}
                 -HV 2021
                 -WX
+                -Zpr
                 -Zi
                 -Fd "${_pdb}"
                 "$<IF:$<CONFIG:Debug>,-Od,-O3>"

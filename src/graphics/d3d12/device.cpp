@@ -205,7 +205,8 @@ Device::Device(const DeviceOptions& options) {
 
     LC_CHECK_HR(CreateDXGIFactory2(debugLayer_ ? DXGI_CREATE_FACTORY_DEBUG : 0, IID_PPV_ARGS(&factory_)));
 
-    const std::vector<AdapterInfo> adapters = EnumerateAdapters();
+    allAdapters_ = EnumerateAdapters();
+    const std::vector<AdapterInfo>& adapters = allAdapters_;
     int chosen = -1;
     if (options.adapterIndex >= 0) {
         if (static_cast<std::size_t>(options.adapterIndex) >= adapters.size()) {

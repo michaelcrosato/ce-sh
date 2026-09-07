@@ -1,7 +1,9 @@
-// Generated test scenes for the hardware-geometry milestone (spec §16: no asset download dependency).
+// Generated test scenes (spec §16: no asset download dependency). Diagnostic scenes prove geometry
+// and identifiers; lighting scenes carry radiance expectations for T03, T04, T07, T08, and T09.
 #pragma once
 
 #include "scene/camera.h"
+#include "scene/expectations.h"
 #include "scene/scene.h"
 
 #include <optional>
@@ -11,21 +13,14 @@
 
 namespace lc {
 
-// A pixel the validation mode checks: (u, v) in [0, 1] (u right, v down), the stable instance id it
-// must hit (0 = must miss), and whether the hit must be front-facing.
-struct HitExpectation {
-    float u = 0.0f;
-    float v = 0.0f;
-    std::uint32_t expectedStableId = 0;
-    bool expectFrontFace = true;
-    std::string description;
-};
-
 struct SceneDescription {
     std::string name;
     Scene scene;
     Camera camera;
     std::vector<HitExpectation> expectations;
+    std::vector<RadianceExpectation> radianceExpectations;
+    std::vector<StatsPatch> statsPatches;
+    bool needsLighting = false;  // False for the M1 diagnostic scenes.
 };
 
 std::vector<std::string> BuiltinSceneNames();

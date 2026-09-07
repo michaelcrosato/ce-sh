@@ -179,8 +179,8 @@ LRESULT Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_SYSCOMMAND:
-            if ((wParam & 0xFFF0) == SC_KEYMENU) {
-                return 0;  // No menu: swallow Alt so it does not steal focus.
+            if ((wParam & 0xFFF0) == SC_KEYMENU && lParam == 0) {
+                return 0;  // No menu: swallow a lone Alt press; Alt+Space (system menu) still works.
             }
             break;
 

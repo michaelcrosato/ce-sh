@@ -19,3 +19,17 @@ LC_TEST(radiometry_huge_rectangle_approaches_pi_times_radiance) {
     const float corner = lc::math::RectangleIrradianceAtCorner(10000.0f, 10000.0f, 1.0f, 1.0f);
     LC_CHECK_NEAR(corner, lc::math::kPi / 4.0f, 1e-3);
 }
+
+LC_TEST(radiometry_arbitrary_point_matches_numerical_integration) {
+    // Points under the footprint, on its edge, and well outside it.
+    const float points[][2] = {{0.0f, 0.0f}, {0.3f, -0.1f}, {0.5f, 0.0f}, {0.75f, 0.2f}, {-1.4f, 0.9f}};
+    for (const auto& p : points) {
+        const float analytic = lc::math::RectangleIrradianceAtPoint(-0.5f, 0.5f, -0.25f, 0.25f, 1.5f, 4.0f, p[0], p[1]);
+        const float numerical = lc::math::RectangleIrradianceNumericalAtPoint(-0.5f, 0.5f, -0.25f, 0.25f, 1.5f, 4.0f, p[0], p[1], 400);
+        LC_CHECK(analytic > 0.0f);
+        LC_CHECK_NEAR(analytic / numerical, 1.0f, 2e-3);
+    }
+    // Consistency with the centred formula.
+    LC_CHECK_NEAR(lc::math::RectangleIrradianceAtPoint(-0.5f, 0.5f, -0.25f, 0.25f, 1.5f, 4.0f, 0.0f, 0.0f),
+                  lc::math::RectangleIrradianceBelowCentre(1.0f, 0.5f, 1.5f, 4.0f), 1e-6);
+}

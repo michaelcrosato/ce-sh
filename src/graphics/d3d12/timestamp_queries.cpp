@@ -62,14 +62,21 @@ std::vector<TimerResult> TimestampQueries::Collect(std::uint32_t slot) {
     if (names.empty()) {
         return results;
     }
-    const auto* ticks = static_cast<const std::uint64_t*>(readback_.Map());
+    // Map only this slot's range: the other slot may still be written by an in-flight resolve.
+    const std::uint32_t first = QueryIndex(slot, 0, false);
+    const auto count = static_cast<std::uint32_t>(names.size()) * 2;
+    const D3D12_RANGE range{static_cast<SIZE_T>(first) * sizeof(std::uint64_t), static_cast<SIZE_T>(first + count) * sizeof(std::uint64_t)};
+    void* mapped = nullptr;
+    LC_CHECK_HR(readback_.Get()->Map(0, &range, &mapped));
+    const auto* ticks = static_cast<const std::uint64_t*>(mapped);
     for (std::uint32_t t = 0; t < names.size(); ++t) {
         const std::uint64_t begin = ticks[QueryIndex(slot, t, false)];
         const std::uint64_t end = ticks[QueryIndex(slot, t, true)];
         const double ms = end >= begin ? static_cast<double>(end - begin) * ticksToMilliseconds_ : 0.0;
         results.push_back(TimerResult{names[t], ms});
     }
-    readback_.Unmap();
+    const D3D12_RANGE nothingWritten{0, 0};
+    readback_.Get()->Unmap(0, &nothingWritten);
     return results;
 }
 

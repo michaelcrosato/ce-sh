@@ -1,5 +1,6 @@
 // Test-only CPU ray caster (Möller–Trumbore over every instance). Used to check that hand-written
-// hit expectations are self-consistent before the GPU is asked to reproduce them.
+// hit expectations are self-consistent before the GPU is asked to reproduce them. Follows ideal
+// mirrors for up to a few bounces so mirror identity expectations can be verified too.
 #pragma once
 
 #include "scene/scene.h"
@@ -14,7 +15,10 @@ struct CpuHit {
     float t = std::numeric_limits<float>::infinity();
     std::uint32_t stableId = 0;
     std::uint32_t primitiveIndex = 0;
+    std::uint32_t instanceIndex = 0;
     bool frontFace = false;
+    math::Vec3 position;
+    math::Vec3 normal;  // Geometric, from winding (not flipped).
 };
 
 inline bool IntersectTriangle(math::Vec3 origin, math::Vec3 dir, math::Vec3 p0, math::Vec3 p1, math::Vec3 p2,
@@ -39,7 +43,9 @@ inline bool IntersectTriangle(math::Vec3 origin, math::Vec3 dir, math::Vec3 p0, 
 
 inline CpuHit RaycastScene(const Scene& scene, math::Vec3 origin, math::Vec3 dir, float tMin, float tMax) {
     CpuHit best;
-    for (const Instance& inst : scene.Instances()) {
+    const auto& instances = scene.Instances();
+    for (std::uint32_t i = 0; i < instances.size(); ++i) {
+        const Instance& inst = instances[i];
         const MeshData& mesh = scene.Meshes()[inst.mesh.value].data;
         for (std::uint32_t tri = 0; tri < mesh.TriangleCount(); ++tri) {
             const math::Vec3 p0 = inst.objectToWorld.TransformPoint(mesh.positions[mesh.indices[tri * 3 + 0]]);
@@ -51,11 +57,29 @@ inline CpuHit RaycastScene(const Scene& scene, math::Vec3 origin, math::Vec3 dir
                 best.t = t;
                 best.stableId = inst.id.value;
                 best.primitiveIndex = tri;
-                best.frontFace = math::Dot(math::Cross(p1 - p0, p2 - p0), dir) < 0.0f;
+                best.instanceIndex = i;
+                best.normal = math::Normalize(math::Cross(p1 - p0, p2 - p0));
+                best.frontFace = math::Dot(best.normal, dir) < 0.0f;
+                best.position = origin + dir * t;
             }
         }
     }
     return best;
+}
+
+// Follows ideal mirror materials (up to maxMirrorBounces) and returns the first non-mirror hit.
+inline CpuHit RaycastThroughMirrors(const Scene& scene, math::Vec3 origin, math::Vec3 dir, int maxMirrorBounces = 4) {
+    CpuHit hit;
+    for (int bounce = 0; bounce <= maxMirrorBounces; ++bounce) {
+        hit = RaycastScene(scene, origin, dir, 1e-4f, 1000.0f);
+        if (!hit.hit) return hit;
+        const Material& m = scene.Materials()[scene.Instances()[hit.instanceIndex].materialIndex];
+        if (m.type != MaterialType::Mirror) return hit;
+        const math::Vec3 n = hit.frontFace ? hit.normal : -hit.normal;
+        dir = math::Normalize(dir - n * (2.0f * math::Dot(dir, n)));
+        origin = hit.position + n * 1e-4f;
+    }
+    return hit;
 }
 
 }  // namespace lc::test

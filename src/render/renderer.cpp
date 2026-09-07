@@ -80,7 +80,7 @@ Renderer::Renderer(gfx::Device& device, gfx::GraphicsQueue& queue, std::uint32_t
     layoutProbe_ = std::make_unique<gfx::ComputePipeline>(device, rootSignature_.Get(), shaderDir / "layout_probe.cso", L"Layout Probe CS");
 }
 
-Renderer::~Renderer() { queue_.WaitIdle(); }
+Renderer::~Renderer() { queue_.DrainForShutdown(); }
 
 void Renderer::CreateOutputs(std::uint32_t width, std::uint32_t height) {
     if (width == 0 || height == 0) {
@@ -226,23 +226,42 @@ void Renderer::RecordTrace(const RenderSnapshot& snapshot) {
     if (!sceneGpu_ || snapshot.scene == nullptr) {
         throw Error("Renderer::RecordTrace: no scene set");
     }
-    FrameContext& frame = frames_[frameSlot_];
+    try {
+        FrameContext& frame = frames_[frameSlot_];
 
-    const std::uint32_t tlasTimer = timers_.Begin(list_.Get(), "tlas_update");
-    sceneGpu_->UpdateInstances(*snapshot.scene, *frame.arena, list_.Get());
-    timers_.End(list_.Get(), tlasTimer);
+        // Order this frame's UAV writes after the previous frame's dispatch and copies. Two frames
+        // may be in flight; nothing else serializes their accesses to the output textures.
+        const D3D12_RESOURCE_BARRIER outputs[3] = {gfx::UavBarrier(display_.Get()), gfx::UavBarrier(linear_.Get()),
+                                                   gfx::UavBarrier(hitInfo_.Get())};
+        list_->ResourceBarrier(3, outputs);
 
-    const gpu::FrameConstants constants = BuildFrameConstants(snapshot);
-    const gfx::UploadAllocation cb = frame.arena->Allocate(sizeof(constants));
-    std::memcpy(cb.cpu, &constants, sizeof(constants));
+        const std::uint32_t tlasTimer = timers_.Begin(list_.Get(), "tlas_update");
+        sceneGpu_->UpdateInstances(*snapshot.scene, *frame.arena, list_.Get());
+        timers_.End(list_.Get(), tlasTimer);
 
-    BindCommon(list_.Get(), cb.gpu, sceneGpu_->TlasAddress(), sceneGpu_->InstanceRecordsAddress(), sceneGpu_->MeshRecordsAddress(),
-               sceneGpu_->PositionsAddress(), sceneGpu_->IndicesAddress());
-    list_->SetPipelineState(cameraView_->Get());
+        const gpu::FrameConstants constants = BuildFrameConstants(snapshot);
+        const gfx::UploadAllocation cb = frame.arena->Allocate(sizeof(constants));
+        std::memcpy(cb.cpu, &constants, sizeof(constants));
 
-    const std::uint32_t traceTimer = timers_.Begin(list_.Get(), "trace");
-    list_->Dispatch((width_ + 7) / 8, (height_ + 7) / 8, 1);
-    timers_.End(list_.Get(), traceTimer);
+        BindCommon(list_.Get(), cb.gpu, sceneGpu_->TlasAddress(), sceneGpu_->InstanceRecordsAddress(), sceneGpu_->MeshRecordsAddress(),
+                   sceneGpu_->PositionsAddress(), sceneGpu_->IndicesAddress());
+        list_->SetPipelineState(cameraView_->Get());
+
+        const std::uint32_t traceTimer = timers_.Begin(list_.Get(), "trace");
+        list_->Dispatch((width_ + 7) / 8, (height_ + 7) / 8, 1);
+        timers_.End(list_.Get(), traceTimer);
+    } catch (...) {
+        AbandonFrame();
+        throw;
+    }
+}
+
+void Renderer::AbandonFrame() noexcept {
+    if (!frameOpen_) {
+        return;
+    }
+    frameOpen_ = false;
+    list_->Close();  // Nothing is submitted; the allocator is reset on the next BeginFrame.
 }
 
 void Renderer::RecordCopyToBackBuffer(ID3D12Resource* backBuffer, std::uint32_t backBufferWidth, std::uint32_t backBufferHeight) {
@@ -274,11 +293,11 @@ std::uint64_t Renderer::EndFrame() {
     }
     timers_.End(list_.Get(), frameTimer_);
     timers_.Resolve(list_.Get());
+    frameOpen_ = false;  // Whatever happens below, the frame is no longer being recorded.
     LC_CHECK_HR(list_->Close());
     queue_.Execute(list_.Get());
     FrameContext& frame = frames_[frameSlot_];
     frame.fenceValue = queue_.Signal();
-    frameOpen_ = false;
     ++frameCounter_;
     return frame.fenceValue;
 }

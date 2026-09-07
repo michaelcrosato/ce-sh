@@ -11,7 +11,7 @@ struct ClosestHit {
     uint instanceId;        // InstanceID from the instance descriptor (== scene stable id).
     uint primitiveIndex;    // Triangle index within the mesh.
     float2 barycentrics;    // Weights of vertices 1 and 2; vertex 0 weight = 1 - x - y.
-    bool frontFace;         // Counter-clockwise winding as seen by the ray (instance flag set).
+    bool frontFace;         // DXR default rule: dot(cross(p1 - p0, p2 - p0), direction) < 0 (no instance flag).
     float3x4 objectToWorld; // Instance transform at trace time.
 };
 

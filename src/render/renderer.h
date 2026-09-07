@@ -82,6 +82,7 @@ private:
 
     void CreateOutputs(std::uint32_t width, std::uint32_t height);
     void CreateRootSignature();
+    void AbandonFrame() noexcept;
     gpu::FrameConstants BuildFrameConstants(const RenderSnapshot& snapshot) const;
     void BindCommon(ID3D12GraphicsCommandList4* list, D3D12_GPU_VIRTUAL_ADDRESS constants, D3D12_GPU_VIRTUAL_ADDRESS tlas,
                     D3D12_GPU_VIRTUAL_ADDRESS instances, D3D12_GPU_VIRTUAL_ADDRESS meshes, D3D12_GPU_VIRTUAL_ADDRESS positions,

@@ -37,7 +37,7 @@ SwapChain::SwapChain(Device& device, GraphicsQueue& queue, HWND window, std::uin
               vsync_ ? "on" : "off", tearing_ ? "allowed" : "unavailable");
 }
 
-SwapChain::~SwapChain() { queue_.WaitIdle(); }
+SwapChain::~SwapChain() { queue_.DrainForShutdown(); }
 
 void SwapChain::AcquireBuffers() {
     for (std::uint32_t i = 0; i < kBufferCount; ++i) {

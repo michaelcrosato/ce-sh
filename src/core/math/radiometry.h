@@ -12,7 +12,15 @@ float RectangleIrradianceAtCorner(float a, float b, float h, float radiance);
 // Same, with the point directly below the rectangle's centre (sum of four corner rectangles).
 float RectangleIrradianceBelowCentre(float a, float b, float h, float radiance);
 
-// Midpoint-rule numerical integration of L * cos_p * cos_l / r^2 over an n x n grid; test use only.
+// Irradiance at (px, pz) on the plane y = 0 from the rectangle [x0, x1] x [z0, z1] at height h
+// facing down (signed corner decomposition; the point may lie outside the footprint).
+float RectangleIrradianceAtPoint(float x0, float x1, float z0, float z1, float h, float radiance, float px, float pz);
+
+// Midpoint-rule numerical integration of L * cos_p * cos_l / r^2 over an n x n grid for the point
+// below the centre; test use only.
 float RectangleIrradianceNumerical(float a, float b, float h, float radiance, int n);
+
+// Same for an arbitrary point (px, pz) under/beside the rectangle [x0, x1] x [z0, z1].
+float RectangleIrradianceNumericalAtPoint(float x0, float x1, float z0, float z1, float h, float radiance, float px, float pz, int n);
 
 }  // namespace lc::math

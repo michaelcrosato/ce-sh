@@ -52,11 +52,13 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
         // Geometric normal from the world-space winding (counter-clockwise = outward).
         const float3 n = normalize(cross(p1 - p0, p2 - p0));
-        const bool geometricFacing = dot(n, dir) < 0.0;
+        const float facingCosine = dot(n, dir);
+        const bool geometricFacing = facingCosine < 0.0;
 
         uint flags = 0u;
         if (hit.frontFace) flags |= LC_HIT_FLAG_FRONT_FACE;
         if (geometricFacing) flags |= LC_HIT_FLAG_GEOMETRIC_FACING;
+        if (abs(facingCosine) < LC_GRAZING_COSINE) flags |= LC_HIT_FLAG_GRAZING;
         info = uint4(inst.stableId, hit.primitiveIndex, flags, hit.instanceIndex);
         distance = hit.t;
 

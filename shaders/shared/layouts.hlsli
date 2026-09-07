@@ -21,6 +21,8 @@ static const uint LC_MISS_ID = 0xFFFFFFFFu;
 // Hit-info texel z component bits.
 static const uint LC_HIT_FLAG_FRONT_FACE = 1u;        // RayQuery reported a front-facing triangle.
 static const uint LC_HIT_FLAG_GEOMETRIC_FACING = 2u;  // Geometric normal faces the ray origin.
+static const uint LC_HIT_FLAG_GRAZING = 4u;           // |dot(normal, direction)| below LC_GRAZING_COSINE: facing is ill-defined.
+static const float LC_GRAZING_COSINE = 1e-3f;
 
 // 256 bytes. Bound as a root constant buffer (b0).
 struct FrameConstants {

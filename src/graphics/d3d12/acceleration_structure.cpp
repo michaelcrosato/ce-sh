@@ -55,7 +55,9 @@ void Blas::Build(Device& device, ID3D12GraphicsCommandList4* list, const BlasGeo
 }
 
 void Tlas::Reserve(Device& device, std::uint32_t maxInstances, std::wstring_view name) {
-    maxInstances_ = std::max<std::uint32_t>(1, maxInstances);
+    // Headroom so a scene can add instances (props, the player body) without a rebuild of the
+    // reservation: at least 64 and at least twice the current count.
+    maxInstances_ = std::max<std::uint32_t>(64, maxInstances * 2);
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs{};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
     inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
@@ -91,10 +93,12 @@ void Tlas::RecordBuild(ID3D12GraphicsCommandList4* list, D3D12_GPU_VIRTUAL_ADDRE
     build.DestAccelerationStructureData = result_.Address();
     build.ScratchAccelerationStructureData = scratch_.Address();
 
+    // Before: order against the previous frame's traversal of this TLAS. After: a null-resource
+    // UAV barrier covers both the result and the scratch buffer for the upcoming dispatch.
     const D3D12_RESOURCE_BARRIER before = UavBarrier(result_.Get());
     list->ResourceBarrier(1, &before);
     list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
-    const D3D12_RESOURCE_BARRIER after = UavBarrier(result_.Get());
+    const D3D12_RESOURCE_BARRIER after = UavBarrier(nullptr);
     list->ResourceBarrier(1, &after);
 }
 

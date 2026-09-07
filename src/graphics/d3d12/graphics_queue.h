@@ -26,6 +26,11 @@ public:
     // Full GPU drain. Acceptable for setup, resize, and captures; never per frame in production.
     void WaitIdle();
 
+    // Drain for destructors: never throws, returns immediately after device removal, bounded wait.
+    void DrainForShutdown() noexcept;
+
+    bool IsDeviceRemoved() const { return fence_ && fence_->GetCompletedValue() == UINT64_MAX; }
+
     std::uint64_t LastSignaledValue() const { return nextValue_ - 1; }
     std::uint64_t TimestampFrequency() const { return timestampFrequency_; }
 

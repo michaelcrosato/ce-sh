@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace lc {
@@ -41,6 +42,8 @@ public:
     // Validates the material (throws lc::Error) and returns its index.
     std::uint32_t AddMaterial(Material material);
 
+    // Rejects transforms with a non-positive determinant (mirroring) or non-uniform scale until
+    // their handling is tested (spec §11).
     InstanceId AddInstance(std::string name, MeshId mesh, const math::Mat4& objectToWorld,
                            std::uint32_t materialIndex = 0);
 
@@ -68,6 +71,7 @@ private:
     std::vector<Mesh> meshes_;
     std::vector<Material> materials_;
     std::vector<Instance> instances_;
+    std::unordered_map<std::uint32_t, std::uint32_t> instanceIndexById_;
     std::uint32_t nextInstanceId_ = 1;
     std::uint32_t materialRevision_ = 0;
 };

@@ -42,6 +42,7 @@ private:
     gfx::GpuBuffer indices_;
     gfx::GpuBuffer meshRecords_;
     std::vector<gfx::Blas> blas_;
+    std::uint32_t uploadedMeshCount_ = 0;
     gfx::Tlas tlas_;
     std::vector<std::uint32_t> lastRevisions_;
     D3D12_GPU_VIRTUAL_ADDRESS instanceRecordsAddress_ = 0;

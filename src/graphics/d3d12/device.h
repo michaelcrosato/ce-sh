@@ -76,6 +76,8 @@ public:
     IDXGIFactory6* Factory() const { return factory_.Get(); }
     IDXGIAdapter3* Adapter() const { return adapter_.Get(); }
     const AdapterInfo& AdapterDetails() const { return adapterInfo_; }
+    // The adapter list enumerated when this device was created (avoids re-probing every adapter).
+    const std::vector<AdapterInfo>& AllAdapters() const { return allAdapters_; }
     const DeviceCapabilities& Caps() const { return caps_; }
     bool DebugLayerEnabled() const { return debugLayer_; }
 
@@ -102,6 +104,7 @@ private:
     ComPtr<ID3D12InfoQueue1> infoQueue1_;
     DWORD callbackCookie_ = 0;
     AdapterInfo adapterInfo_;
+    std::vector<AdapterInfo> allAdapters_;
     DeviceCapabilities caps_;
     bool debugLayer_ = false;
     std::atomic<std::size_t> infoQueueErrors_{0};
