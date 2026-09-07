@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 
 namespace lc::audio {
 
@@ -100,23 +101,29 @@ std::vector<Command> Director::Update(const WorldSnapshot& s, float dt) {
     }
     humsOn_ = std::move(humsNow);
 
-    // Door: creak when a leaf starts to move, a thud when it reaches an end stop.
+    // Doors: a creak when a leaf starts to move, a thud when it reaches an end stop.
     if (!first) {
-        if (s.doorMoving && !last_.doorMoving) {
-            out.push_back(OneShot(ClipId::DoorCreak, s.doorPosition, 1.0f, true, true));
-            out.push_back(Cue("The door creaks"));
+        for (std::size_t i = 0; i < s.doors.size() && i < last_.doors.size(); ++i) {
+            const DoorSnapshot& d = s.doors[i];
+            const DoorSnapshot& was = last_.doors[i];
+            if (d.moving && !was.moving) {
+                out.push_back(OneShot(ClipId::DoorCreak, d.position, 1.0f, true, true));
+                out.push_back(Cue("The door creaks"));
+            }
+            if (!d.moving && was.moving) {
+                out.push_back(OneShot(ClipId::DoorThud, d.position, d.closed ? 1.0f : 0.6f, true, true));
+                if (d.closed) out.push_back(Cue("The door shuts"));
+            }
         }
-        if (!s.doorMoving && last_.doorMoving) {
-            out.push_back(OneShot(ClipId::DoorThud, s.doorPosition, s.doorClosed ? 1.0f : 0.6f, true, true));
-            if (s.doorClosed) out.push_back(Cue("The door shuts"));
-        }
-        // Lamp: the switch and the handling.
+        // The lamp's switch; every item's handling on pick-up and placement.
         if (s.lampOn != last_.lampOn) {
             out.push_back(OneShot(ClipId::LampClick, s.lampPosition, 1.0f, true, true));
             out.push_back(Cue(s.lampOn ? "Click: the lamp is on" : "Click: the lamp is off"));
         }
-        if (s.lampHeld != last_.lampHeld) {
-            out.push_back(OneShot(ClipId::LampHandle, s.lampPosition, 0.8f, true, true));
+        for (std::size_t i = 0; i < s.items.size() && i < last_.items.size(); ++i) {
+            if (s.items[i].held != last_.items[i].held) {
+                out.push_back(OneShot(ClipId::LampHandle, s.items[i].position, 0.8f, true, true));
+            }
         }
         // Footsteps every kStepDistance metres of the player's own motion (never occluded).
         walked_ += math::Length(s.playerFeet - last_.playerFeet);
@@ -148,6 +155,20 @@ std::vector<Command> Director::Update(const WorldSnapshot& s, float dt) {
     if (threatMovedNow && threatNear && threatCueTimer_ <= 0.0f) {
         out.push_back(Cue("A machine whirs nearby"));
         threatCueTimer_ = kThreatCuePeriod;
+    }
+
+    // Fans: the loop runs while the blades turn, at the level of their speed (a stopped fan is silent).
+    for (std::size_t i = 0; i < s.fans.size(); ++i) {
+        const std::string key = std::format("fan:{}", i);
+        const bool turning = s.fans[i].speedFraction > 0.01f;
+        const bool was = i < last_.fans.size() && last_.fans[i].speedFraction > 0.01f && !first;
+        if (turning && !was) {
+            out.push_back(Loop(Command::Kind::StartLoop, key, ClipId::FanLoop, Category::Ambience, s.fans[i].position, s.fans[i].speedFraction, true));
+        } else if (!turning && was) {
+            out.push_back(Loop(Command::Kind::StopLoop, key, ClipId::FanLoop, Category::Ambience, s.fans[i].position, 0.0f, true));
+        } else if (turning && std::fabs(s.fans[i].speedFraction - last_.fans[i].speedFraction) > 1e-3f) {
+            out.push_back(Loop(Command::Kind::MoveLoop, key, ClipId::FanLoop, Category::Ambience, s.fans[i].position, s.fans[i].speedFraction, true));
+        }
     }
 
     // Objective events (one frame each).

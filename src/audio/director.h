@@ -57,16 +57,31 @@ struct FixtureSnapshot {
     ClipId hum = ClipId::FixtureHum;
 };
 
+struct DoorSnapshot {
+    bool moving = false;
+    bool closed = true;             // Fully closed.
+    math::Vec3 position;
+};
+
+struct ItemSnapshot {
+    bool held = false;
+    math::Vec3 position;            // The item transform's origin (the same transform as the render).
+};
+
+struct FanSnapshot {
+    math::Vec3 position;
+    float speedFraction = 0.0f;     // 0 stopped .. 1 full speed.
+};
+
 // Everything the rules need, read from the world each frame (no rendering data).
 struct WorldSnapshot {
     math::Vec3 playerFeet;
-    bool doorMoving = false;
-    bool doorOpen = false;          // Fully open.
-    bool doorClosed = true;         // Fully closed.
-    math::Vec3 doorPosition;
-    bool lampOn = true;
+    std::vector<DoorSnapshot> doors;
+    bool lampOn = true;             // The lit item's switch.
     bool lampHeld = false;
     math::Vec3 lampPosition;        // The fixture transform's origin (the same transform as the render).
+    std::vector<ItemSnapshot> items;  // Every carried item (handling sounds on pick-up and placement).
+    std::vector<FanSnapshot> fans;
     math::Vec3 threatPosition;
     bool threatPresent = true;
     bool threatOccluded = false;    // A solid between the listener and the threat (the cue respects it).

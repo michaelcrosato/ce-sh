@@ -7,7 +7,7 @@ namespace lc::game {
 
 bool EvaluateStateCheck(const World& world, const ReplayCheck& check, std::string& detail) {
     if (check.kind == "objective_state") {
-        const char* actual = ObjectivePhaseName(world.Phase());
+        const std::string& actual = world.Phase();
         detail = std::format("objective '{}' (expected '{}')", actual, check.state);
         return check.state == actual;
     }

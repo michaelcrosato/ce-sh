@@ -62,8 +62,10 @@ add_test(NAME gpu_t13_player_in_reflection COMMAND LastCircuit --scene two_room 
 # The world-state hash of each replay comes from the CPU-only run (`--simulate-only`; regenerate the
 # constants below with that command whenever the rules change on purpose); every rendered run, in any
 # mode, exposure, or internal size, must reproduce it, and the world-state checks run in all of them.
-set(LC_T15_ROUTE_HASH 8916cf7a6bd38090)
-set(LC_T15_CATCH_HASH b838d2921818a84f)
+# Regenerated for M6 Task 2 (the hash now covers every door, item, fan, and circuit; the events and
+# their ticks are unchanged: objective at 10/714/730/1461, the catch at 208 and completion at 1670).
+set(LC_T15_ROUTE_HASH 8ab83924a89a07c7)
+set(LC_T15_CATCH_HASH 52f07caf9851af8a)
 add_test(NAME sim_t15_route_cpu_only COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_route.json" --simulate-only --validate --expect-state-hash ${LC_T15_ROUTE_HASH})
 add_test(NAME sim_t15_catch_restart_cpu_only COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_catch_restart.json" --simulate-only --validate --expect-state-hash ${LC_T15_CATCH_HASH})
 add_test(NAME gpu_t14_rules_raw COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_route.json" --mode raw --frames 1481 --validate --headless --expect-state-hash ${LC_T15_ROUTE_HASH})

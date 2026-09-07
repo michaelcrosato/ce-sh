@@ -85,7 +85,8 @@ LC_TEST(world_threat_walks_and_ping_pongs) {
 
 LC_TEST(world_lamp_follows_the_player_when_held_and_snaps_to_sockets) {
     lc::TwoRoomLevel level = lc::BuildTwoRoomLevel();
-    lc::game::Lamp lamp(level, level.floorSocket);
+    LC_REQUIRE(!level.items.empty());
+    lc::game::Item lamp(level.items[0], level.floorSocket);
     LC_CHECK(lamp.State() == lc::game::LampState::Placed);
     LC_CHECK(lc::math::NearlyEqual(lamp.Current().position, level.floorSocket.position, 0.0f));
     lc::game::Player player;

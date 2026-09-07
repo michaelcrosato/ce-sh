@@ -6,11 +6,14 @@
 #include "game/simulation.h"
 #include "game/state_checks.h"
 #include "game/world.h"
+#include "scene/scene_file.h"
 #include "scene/two_room_level.h"
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
 
 #ifndef LC_REPLAY_DIR
 #define LC_REPLAY_DIR "tests/replay"
@@ -19,7 +22,6 @@
 namespace {
 
 using lc::game::InputFrame;
-using lc::game::ObjectivePhase;
 using lc::game::ThreatBehaviour;
 using lc::game::ThreatState;
 using lc::game::World;
@@ -91,6 +93,126 @@ struct SimulatedReplay {
 
 }  // namespace
 
+namespace {
+
+std::string ReadText(const std::filesystem::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+std::string Replace(std::string text, const std::string& from, const std::string& to) {
+    const std::size_t pos = text.find(from);
+    LC_REQUIRE(pos != std::string::npos);
+    return text.replace(pos, from.size(), to);
+}
+
+// The two-room document with M6 mechanics grafted on: a fuse item that hides when carried, a fuse box
+// and an exit panel that accept it, circuit b powered by the fuse in the panel, a fan on circuit b,
+// and the door locked until circuit b comes on.
+lc::TwoRoomLevel LevelWithFuseFanAndLockedDoor() {
+    std::string text = ReadText(lc::AssetRoot() / lc::kTwoRoomSceneFile);
+    text = Replace(text, "{\"id\": \"b\", \"on\": false}", "{\"id\": \"b\", \"on\": false, \"poweredBy\": {\"item\": \"fuse\", \"socket\": \"exit_panel\"}}");
+    text = Replace(text, "{\"id\": \"door\", \"object\": \"door\"}", "{\"id\": \"door\", \"object\": \"door\", \"locked\": true, \"opensWithCircuit\": \"b\"}");
+    const std::string shelf = "{\"id\": \"shelf\", \"position\": [4.25, 0.95, 10.25], \"yaw\": -1.5707963, \"accepts\": [\"lamp\"], \"text\": \"shelf\"}";
+    text = Replace(text, shelf,
+                   shelf + ",\n    {\"id\": \"fuse_box\", \"position\": [3.3, 1.0, 0.5], \"accepts\": [\"fuse\"], \"text\": \"fuse box\"},\n"
+                           "    {\"id\": \"exit_panel\", \"position\": [3.3, 1.0, 1.2], \"accepts\": [\"fuse\"], \"text\": \"exit panel\"}");
+    const std::string lampItem = "\"startSocket\": \"floor_a\"}";
+    text = Replace(text, lampItem, lampItem + ",\n      {\"id\": \"fuse\", \"text\": \"fuse\", \"object\": \"fuse_body\", \"startSocket\": \"fuse_box\", \"hidesWhenCarried\": true}");
+    const std::string crate = "{\"id\": \"crate\", \"kind\": \"box\", \"half\": [0.4, 0.4, 0.4], \"centre\": [0.8, 0.4, 3.0], \"material\": \"crate\"}";
+    text = Replace(text, crate,
+                   crate + ",\n    {\"id\": \"fuse_body\", \"kind\": \"box\", \"half\": [0.03, 0.05, 0.02], \"material\": \"crate\", \"collider\": false},\n"
+                           "    {\"id\": \"fan\", \"kind\": \"fan\", \"centre\": [2.0, 2.3, 3.5], \"axis\": [0, 0, 1], \"radius\": 0.4, \"blades\": 3, \"bladeWidth\": 0.12, "
+                           "\"bladeThickness\": 0.02, \"hubRadius\": 0.06, \"rpm\": 60, \"circuit\": \"b\", \"material\": \"crate\"}");
+    lc::SceneFileResult r = lc::ParseSceneFile(text, "fuse_fan_door");
+    for (const std::string& e : r.errors) std::printf("    error: %s\n", e.c_str());
+    LC_REQUIRE(r.level.has_value());
+    return std::move(*r.level);
+}
+
+bool EmitterOn(const World& w, const std::string& material) {
+    for (const lc::Material& m : w.GetScene().Materials()) {
+        if (m.name == material) return m.emitterOn;
+    }
+    return false;
+}
+
+}  // namespace
+
+LC_TEST(powered_circuit_fan_locked_door_and_pocketed_item_follow_the_fuse) {
+    World w(LevelWithFuseFanAndLockedDoor(), ThreatBehaviour::Patrol);
+    LC_REQUIRE(w.Items().size() == 2u);
+    LC_REQUIRE(w.Fans().size() == 1u);
+    const lc::game::Item* fuse = w.FindItem("fuse");
+    LC_REQUIRE(fuse != nullptr);
+    LC_CHECK(fuse->HidesWhenCarried());
+    LC_CHECK(!w.CircuitOn("b"));
+    LC_CHECK(!EmitterOn(w, "fixture_b"));
+    LC_CHECK(!w.Fans()[0].Turning());
+    LC_CHECK(w.GetDoor().Locked());
+    // The locked door straight ahead is never offered; the fuse box beside the line of sight is:
+    // the prompt names the fuse, E takes it, and it hides in the torso.
+    const auto target = w.CurrentInteraction();
+    LC_REQUIRE(target.has_value());
+    LC_CHECK_EQ(target->name, std::string("fuse"));
+    LC_CHECK_EQ(target->text, std::string("Take the fuse"));
+    Run(w, Interact(), 1);
+    LC_CHECK(w.GetDoor().State() == lc::game::DoorState::Closed);
+    LC_CHECK(fuse->State() == lc::game::ItemState::Held);
+    w.WriteRenderScene(w.GetScene(), 1.0f);
+    const lc::Instance* body = w.GetScene().FindInstance(w.Level().items[1].body);
+    LC_REQUIRE(body != nullptr);
+    const Vec3 torso = lc::PlayerTorsoTransform({w.GetPlayer().Current().position, w.GetPlayer().Current().yaw, 0.0f}).TranslationPart();
+    LC_CHECK(lc::math::Length(body->objectToWorld.TranslationPart() - torso) < 0.3f);
+    LC_CHECK(!w.CircuitOn("b"));
+    // The exit panel is straight ahead: E inserts the fuse; circuit b comes on, the fixture lights, the
+    // fan spins up, and the locked door opens by itself.
+    const auto panel = w.CurrentInteraction();
+    LC_REQUIRE(panel.has_value());
+    LC_CHECK_EQ(panel->name, std::string("exit_panel"));
+    LC_CHECK_EQ(panel->text, std::string("Put the fuse in the exit panel"));
+    Run(w, Interact(), 1);
+    LC_CHECK(fuse->State() == lc::game::ItemState::Placed);
+    LC_CHECK_EQ(fuse->SocketName(), std::string("exit_panel"));
+    LC_CHECK(w.CircuitOn("b"));
+    LC_CHECK(EmitterOn(w, "fixture_b"));
+    LC_CHECK(w.GetDoor().State() == lc::game::DoorState::Opening);
+    Run(w, InputFrame{}, 90);  // 1.5 s: half speed; the door reached open.
+    LC_CHECK(w.Fans()[0].Turning());
+    LC_CHECK(w.Fans()[0].SpeedFraction() > 0.4f && w.Fans()[0].SpeedFraction() < 0.6f);
+    LC_CHECK(w.GetDoor().State() == lc::game::DoorState::Open);
+    Run(w, InputFrame{}, 120);
+    LC_CHECK_NEAR(w.Fans()[0].SpeedFraction(), 1.0f, 1e-4f);
+    // The blades turn: their transforms change every tick.
+    const lc::Instance* blade = w.GetScene().FindInstance(w.Level().fans[0].blades[0]);
+    LC_REQUIRE(blade != nullptr);
+    w.WriteRenderScene(w.GetScene(), 1.0f);
+    const std::uint32_t revision = blade->transformRevision;
+    Run(w, InputFrame{}, 1);
+    w.WriteRenderScene(w.GetScene(), 1.0f);
+    LC_CHECK(blade->transformRevision > revision);
+    // Taking the fuse back darkens the circuit and the fan spins down to a stop; the door stays open.
+    Run(w, Interact(), 1);
+    LC_CHECK(fuse->State() == lc::game::ItemState::Held);
+    LC_CHECK(!w.CircuitOn("b"));
+    LC_CHECK(!EmitterOn(w, "fixture_b"));
+    Run(w, InputFrame{}, 90);
+    LC_CHECK(w.Fans()[0].Turning());
+    Run(w, InputFrame{}, 120);
+    LC_CHECK(!w.Fans()[0].Turning());
+    LC_CHECK(w.GetDoor().State() == lc::game::DoorState::Open);
+    // The state hash covers the circuit: an identical run agrees, a run without the fuse move differs.
+    World again(LevelWithFuseFanAndLockedDoor(), ThreatBehaviour::Patrol);
+    Run(again, Interact(), 1);
+    Run(again, Interact(), 1);
+    World other(LevelWithFuseFanAndLockedDoor(), ThreatBehaviour::Patrol);
+    Run(other, InputFrame{}, 2);
+    LC_CHECK(again.StateHash() != other.StateHash());
+    LC_CHECK(again.CircuitOn("b") && !other.CircuitOn("b"));
+}
+
 LC_TEST(replay_t15_route_completes_without_a_catch_and_is_deterministic) {
     SimulatedReplay a("t15_route.json");
     LC_CHECK(a.replay.hunt);
@@ -100,7 +222,8 @@ LC_TEST(replay_t15_route_completes_without_a_catch_and_is_deterministic) {
     LC_CHECK_EQ(a.checks->Failed(), 0u);
     LC_CHECK_EQ(a.checks->Pending(), 0u);
     LC_CHECK(a.checks->Evaluated() >= 8u);
-    LC_CHECK(a.world->Phase() == ObjectivePhase::Escaped);
+    LC_CHECK(a.world->Phase() == "escaped");
+    LC_CHECK(a.world->Complete());
     LC_CHECK_EQ(a.world->Catches(), 0u);
     LC_CHECK(a.world->GetLamp().State() == lc::game::LampState::Held);
     SimulatedReplay b("t15_route.json");
@@ -117,7 +240,7 @@ LC_TEST(replay_t15_catch_restarts_from_the_checkpoint_and_still_completes) {
     LC_CHECK_EQ(run.checks->Pending(), 0u);
     LC_CHECK_EQ(run.world->Catches(), 1u);
     LC_CHECK_EQ(run.world->Restarts(), 1u);
-    LC_CHECK(run.world->Phase() == ObjectivePhase::Escaped);
+    LC_CHECK(run.world->Phase() == "escaped");
     // Two different runs never share a hash (the catch is part of the state).
     SimulatedReplay route("t15_route.json");
     LC_CHECK(run.world->StateHash() != route.world->StateHash());
@@ -125,22 +248,25 @@ LC_TEST(replay_t15_catch_restarts_from_the_checkpoint_and_still_completes) {
 
 LC_TEST(objective_phases_advance_with_the_lamp_and_the_exit_and_save_checkpoints) {
     World w(lc::BuildTwoRoomLevel(), ThreatBehaviour::Patrol);
-    LC_CHECK(w.Phase() == ObjectivePhase::Introduction);
+    LC_CHECK(w.Phase() == "introduction");
+    LC_CHECK_EQ(w.ObjectiveLine(), std::string("Find the lamp and pick it up"));
     LC_CHECK(w.Level().hasExit);
     LC_CHECK_NEAR(w.Level().exitRadius, 0.8f, 1e-6);
     TakeLamp(w);
-    LC_CHECK(w.Phase() == ObjectivePhase::LampAcquired);
-    LC_CHECK(w.LastCheckpoint().phase == ObjectivePhase::LampAcquired);
-    LC_CHECK(w.LastCheckpoint().lamp.state == lc::game::LampState::Held);
+    LC_CHECK(w.Phase() == "lamp_acquired");
+    LC_CHECK_EQ(w.CompletedSteps(), 1u);
+    LC_CHECK_EQ(w.LastCheckpoint().completedSteps, 1u);
+    LC_REQUIRE(w.LastCheckpoint().items.size() == 1u);
+    LC_CHECK(w.LastCheckpoint().items[0].state == lc::game::ItemState::Held);
     // Placing on the floor socket again is not the shelf: no advance.
     Run(w, Look(0.0f, -0.11f), 10);
     Run(w, Interact(), 1);  // The floor socket is in reach: the lamp goes back down.
     LC_CHECK(w.GetLamp().State() == lc::game::LampState::Placed);
-    LC_CHECK(w.Phase() == ObjectivePhase::LampAcquired);
+    LC_CHECK(w.Phase() == "lamp_acquired");
     Run(w, Interact(), 1);  // Pick it up again.
     Run(w, Look(0.0f, 0.11f), 10);
     LC_CHECK(w.GetLamp().State() == lc::game::LampState::Held);
-    LC_CHECK(w.Phase() == ObjectivePhase::LampAcquired);
+    LC_CHECK(w.Phase() == "lamp_acquired");
     // Walk the t06 route to the shelf and place the lamp.
     Run(w, Interact(), 1);  // Door.
     Run(w, InputFrame{}, 60);
@@ -152,17 +278,18 @@ LC_TEST(objective_phases_advance_with_the_lamp_and_the_exit_and_save_checkpoints
     Run(w, Look(0.0f, -0.10f), 10);
     Run(w, Interact(), 1);
     LC_REQUIRE(w.GetLamp().SocketName() == w.Level().shelfSocket.name);
-    LC_CHECK(w.Phase() == ObjectivePhase::LampPlaced);
-    LC_CHECK(w.LastCheckpoint().phase == ObjectivePhase::LampPlaced);
+    LC_CHECK(w.Phase() == "lamp_placed");
+    LC_CHECK_EQ(w.LastCheckpoint().completedSteps, 2u);
     Run(w, Interact(), 1);  // Take it back.
-    LC_CHECK(w.Phase() == ObjectivePhase::LampRetrieved);
+    LC_CHECK(w.Phase() == "lamp_retrieved");
+    LC_CHECK_EQ(w.ObjectiveLine(), std::string("Return to the exit in the equipment room with the lamp"));
     // Teleporting the player is not possible; walking back is the replay's job. The exit rule itself:
     // the phase only completes with the lamp held inside the radius (checked through a fresh world).
     World e(lc::BuildTwoRoomLevel(), ThreatBehaviour::Patrol);
     TakeLamp(e);
     Run(e, Look(lc::math::kPi, 0.0f), 1);   // Face -X, toward the exit corner.
     Run(e, Move(-1.0f, 1.0f), 200);          // Diagonal toward (0.9, 0.9): blocked by the walls, ends in the corner.
-    LC_CHECK(e.Phase() == ObjectivePhase::LampAcquired);  // Not retrieved yet: reaching the exit means nothing.
+    LC_CHECK(e.Phase() == "lamp_acquired");  // Not retrieved yet: reaching the exit means nothing.
 }
 
 LC_TEST(threat_hunts_on_gameplay_data_and_a_catch_restarts_from_the_checkpoint) {
@@ -189,7 +316,7 @@ LC_TEST(threat_hunts_on_gameplay_data_and_a_catch_restarts_from_the_checkpoint) 
     LC_CHECK_EQ(w.Restarts(), 1u);
     // Restart: the checkpoint is the lamp pick-up (phase kept), the player is back at that pose, the
     // door closed again, the threat on its path.
-    LC_CHECK(w.Phase() == ObjectivePhase::LampAcquired);
+    LC_CHECK(w.Phase() == "lamp_acquired");
     const Vec3 feet = w.GetPlayer().Current().position;
     LC_CHECK_NEAR(feet.x, w.LastCheckpoint().player.position.x, 1e-6);
     LC_CHECK_NEAR(feet.z, w.LastCheckpoint().player.position.z, 1e-6);

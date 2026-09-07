@@ -145,16 +145,10 @@ bool InputIsActive(const game::InputFrame& f) {
     return f.moveX != 0.0f || f.moveZ != 0.0f || f.lookDx != 0.0f || f.lookDy != 0.0f || f.interactPressed || f.lampPressed;
 }
 
-// Player-facing prompt for the current interaction target (spec §14: a clear prompt).
-std::string PromptFor(game::World& world, const game::InteractionTarget& target) {
-    if (target.name == "door") {
-        const game::DoorState s = world.GetDoor().State();
-        return (s == game::DoorState::Closed || s == game::DoorState::Closing) ? "Open the door" : "Close the door";
-    }
-    if (target.name == "lamp") return "Take the lamp";
-    if (target.name == world.Level().shelfSocket.name) return "Place the lamp on the shelf";
-    if (target.name == world.Level().floorSocket.name) return "Put the lamp down here";
-    return "Use " + target.name;
+// Player-facing prompt for the current interaction target (spec §14: a clear prompt): the world
+// names the action from the door state, the item, or the socket.
+std::string PromptFor(const game::World&, const game::InteractionTarget& target) {
+    return target.text.empty() ? "Use " + target.name : target.text;
 }
 
 // Every emitter instance is a sound source whose hum follows its emitter state and transform.
@@ -186,15 +180,30 @@ std::vector<AudioFixture> CollectAudioFixtures(const Scene& scene, std::uint32_t
 audio::WorldSnapshot AudioSnapshotOf(game::World& world, const std::vector<AudioFixture>& fixtures) {
     audio::WorldSnapshot s;
     s.playerFeet = world.GetPlayer().Current().position;
-    const game::Door& door = world.GetDoor();
-    s.doorMoving = door.IsMoving();
-    s.doorOpen = door.State() == game::DoorState::Open;
-    s.doorClosed = door.State() == game::DoorState::Closed;
-    s.doorPosition = world.Level().door.centre;
-    const game::Lamp& lamp = world.GetLamp();
-    s.lampOn = lamp.IsOn();
-    s.lampHeld = lamp.State() == game::LampState::Held;
-    s.lampPosition = lamp.Current().position + math::Vec3{0.0f, kLampBaseOffset + 0.05f, 0.0f};
+    for (const game::Door& door : world.Doors()) {
+        audio::DoorSnapshot d;
+        d.moving = door.IsMoving();
+        d.closed = door.State() == game::DoorState::Closed;
+        d.position = door.Handle().centre;
+        s.doors.push_back(d);
+    }
+    for (const game::Item& item : world.Items()) {
+        audio::ItemSnapshot it;
+        it.held = item.State() == game::ItemState::Held;
+        it.position = item.Current().position + math::Vec3{0.0f, kLampBaseOffset + 0.05f, 0.0f};
+        s.items.push_back(it);
+        if (item.HasLight()) {
+            s.lampOn = item.IsOn();
+            s.lampHeld = it.held;
+            s.lampPosition = it.position;
+        }
+    }
+    for (const game::Fan& fan : world.Fans()) {
+        audio::FanSnapshot f;
+        f.position = fan.Level().centre;
+        f.speedFraction = fan.SpeedFraction();
+        s.fans.push_back(f);
+    }
     s.threatPosition = world.GetThreat().Current().position;
     const math::Vec3 eye = world.GetPlayer().EyePosition(world.GetPlayer().Current());
     s.threatOccluded = !world.Colliders().SegmentClear(eye, s.threatPosition + math::Vec3{0.0f, 1.0f, 0.0f});
@@ -289,7 +298,7 @@ int Application::RunSimulateOnly() {
     // Spec §15 / T14: the rules run without any renderer. The same ticks, checks, and hash as the
     // rendered runs; a GPU run with --expect-state-hash must reproduce this hash.
     SetAssetRoot(files::ExecutableDirectory() / "assets");
-    const std::filesystem::path levelFile = options_.sceneFile ? *options_.sceneFile : std::filesystem::path(kTwoRoomSceneFile);
+    const std::filesystem::path levelFile = options_.sceneFile ? *options_.sceneFile : std::filesystem::path("scenes") / (options_.scene + ".json");
     SceneFileResult loaded = LoadSceneFile(levelFile, AssetRoot());
     if (!loaded.Ok()) {
         log::Error("scene file '{}' is invalid ({} problem(s)):", loaded.sourceName, loaded.errors.size());
@@ -319,7 +328,7 @@ int Application::RunSimulateOnly() {
     const PoseSpec threat = world.GetThreat().Current();
     log::Info("simulate-only: {} ticks; objective {}, threat {} at ({:.2f}, {:.2f}, {:.2f}), catches {}, restarts {}, player at ({:.2f}, {:.2f}, {:.2f}), "
               "lamp {} ({}), door {}; state hash {:016x}",
-              simulation.Tick(), game::ObjectivePhaseName(world.Phase()), game::ThreatStateName(world.GetThreat().State()), threat.position.x, threat.position.y,
+              simulation.Tick(), world.Phase(), game::ThreatStateName(world.GetThreat().State()), threat.position.x, threat.position.y,
               threat.position.z, world.Catches(), world.Restarts(), feet.x, feet.y, feet.z, world.GetLamp().IsOn() ? "on" : "off",
               world.GetLamp().State() == game::LampState::Held ? "held" : world.GetLamp().SocketName(), game::DoorStateName(world.GetDoor().State()),
               world.StateHash());
@@ -397,7 +406,13 @@ int Application::RunRender() {
     if (options_.sceneFile) {
         levelFile = *options_.sceneFile;
     }
-    const bool fileLevel = options_.sceneFile.has_value() || options_.scene == "two_room";
+    // A scene name that is a file in the asset root (scenes/<name>.json) is a level; built-in names stay generated.
+    if (!options_.sceneFile) {
+        const std::filesystem::path named = std::filesystem::path("scenes") / (options_.scene + ".json");
+        std::error_code ec;
+        if (std::filesystem::exists(AssetRoot() / named, ec)) levelFile = named;
+    }
+    const bool fileLevel = options_.sceneFile.has_value() || levelFile != std::filesystem::path(kTwoRoomSceneFile) || options_.scene == "two_room";
     std::optional<TwoRoomLevel> level;
     if (fileLevel && !loadLevel(level)) {
         return kExitUsage;
@@ -767,9 +782,9 @@ int Application::RunRender() {
                     overlay.prompt = target ? PromptFor(*world, *target) : std::string();
                     const bool lampNear = world->GetLamp().State() == game::LampState::Held || targetName == "lamp";
                     overlay.hint = lampNear ? (world->GetLamp().IsOn() ? "Switch the lamp off" : "Switch the lamp on") : std::string();
-                    overlay.objectiveLine = game::ObjectiveText(world->Phase());
-                    overlay.endCard = world->Phase() == game::ObjectivePhase::Escaped;
-                    if (world->Phase() != game::ObjectivePhase::Introduction) overlay.introCard = false;
+                    overlay.objectiveLine = world->ObjectiveLine();
+                    overlay.endCard = world->Complete();
+                    if (world->CompletedSteps() > 0) overlay.introCard = false;
                 } else if (!frozenReplay) {
                     if (benchmark && simulation.Tick() > replay->LastTick()) {
                         world->Reset();  // Back to the start: a camera cut, so the temporal history is invalid.
@@ -853,8 +868,12 @@ int Application::RunRender() {
                         d.threat = std::format("({:.2f}, {:.2f}, {:.2f}) along {:.1f} of {:.1f} m", tp.position.x, tp.position.y, tp.position.z,
                                                world->GetThreat().Distance(), world->GetThreat().PathLength());
                         d.threat += std::format(", {} [{}]", game::ThreatStateName(world->GetThreat().State()), game::ThreatBehaviourName(world->Behaviour()));
-                        d.objective = std::format("{}: {} (catches {}, restarts {})", game::ObjectivePhaseName(world->Phase()), game::ObjectiveText(world->Phase()),
-                                                  world->Catches(), world->Restarts());
+                        d.objective = std::format("{}: {} (catches {}, restarts {})", world->Phase(), world->ObjectiveLine(), world->Catches(), world->Restarts());
+                        std::string circuits;
+                        for (const CircuitState& c : world->Level().circuits) {
+                            if (!c.poweredByItem.empty()) circuits += std::format("{}{} {}", circuits.empty() ? "" : ", ", c.id, world->CircuitOn(c.id) ? "on" : "off");
+                        }
+                        if (!circuits.empty()) d.objective += "  circuits: " + circuits;
                     }
                     d.sceneFile = levelFile.string();
                     d.sceneHash = sceneContentHash != 0 ? sceneContentHash : scenePtr->ContentHash();
@@ -884,7 +903,7 @@ int Application::RunRender() {
             }
             if (menuAction == ui::MenuAction::Restart && world) {
                 // Spec §15 restart command: the last checkpoint; after the route is complete, the whole route.
-                if (world->Phase() == game::ObjectivePhase::Escaped) {
+                if (world->Complete()) {
                     world->Reset();
                     simulation = game::Simulation(tickRate);
                 } else {
@@ -896,7 +915,7 @@ int Application::RunRender() {
                     audioDirector.Reset();
                 }
                 for (const std::string& e : world->TakeEvents()) log::Info("{}", e);
-                log::Info("restart from the menu at frame {} (objective {})", frameIndex, game::ObjectivePhaseName(world->Phase()));
+                log::Info("restart from the menu at frame {} (objective {})", frameIndex, world->Phase());
             }
             menuReload = menuAction == ui::MenuAction::Reload;
 
@@ -1665,7 +1684,7 @@ int Application::RunRender() {
                 }
                 if (world && replay) {
                     log::Info("state hash {:016x} after {} ticks (objective {}, catches {}, restarts {})", world->StateHash(), simulation.Tick(),
-                              game::ObjectivePhaseName(world->Phase()), world->Catches(), world->Restarts());
+                              world->Phase(), world->Catches(), world->Restarts());
                     if (options_.expectStateHash) {
                         const bool same = *options_.expectStateHash == world->StateHash();
                         log::Info("state hash expected {:016x} -> {}", *options_.expectStateHash, same ? "PASS" : "FAIL");

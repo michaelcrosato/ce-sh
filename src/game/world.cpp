@@ -120,42 +120,44 @@ void Door::Tick(float dt) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Lamp
+// Item
 
-Lamp::Lamp(const TwoRoomLevel& level, const SocketSpec& startSocket)
-    : material_(level.lampMaterial), housingHalf_(level.lampHousingHalf), faceOffset_(level.lampFaceOffset), socketName_(startSocket.name) {
+Item::Item(const LevelItem& level, const SocketSpec& startSocket)
+    : id_(level.id), text_(level.text), hasLight_(level.hasLight), lightMaterial_(level.lightMaterial), half_(level.half), faceOffset_(level.faceOffset),
+      hidesWhenCarried_(level.hidesWhenCarried), socketName_(startSocket.name) {
     current_ = {startSocket.position, startSocket.yaw, 0.0f};
     previous_ = current_;
 }
 
-void Lamp::PickUp() {
-    state_ = LampState::Held;
+void Item::PickUp() {
+    state_ = ItemState::Held;
     socketName_.clear();
 }
 
-void Lamp::Place(const SocketSpec& socket) {
-    state_ = LampState::Placed;
+void Item::Place(const SocketSpec& socket) {
+    state_ = ItemState::Placed;
     socketName_ = socket.name;
     current_ = {socket.position, socket.yaw, 0.0f};
     previous_ = current_;  // A placement is a discrete event; no interpolation from the hand.
 }
 
-void Lamp::Toggle(Scene& scene) {
+void Item::Toggle(Scene& scene) {
+    if (!hasLight_) return;
     on_ = !on_;
-    scene.SetEmitterOn(material_, on_);
+    scene.SetEmitterOn(lightMaterial_, on_);
 }
 
-void Lamp::Restore(const LampSnapshot& snapshot, Scene& scene) {
+void Item::Restore(const ItemSnapshot& snapshot, Scene& scene) {
     state_ = snapshot.state;
     on_ = snapshot.on;
     socketName_ = snapshot.socket;
     current_ = snapshot.pose;
     previous_ = snapshot.pose;
-    scene.SetEmitterOn(material_, on_);
+    if (hasLight_) scene.SetEmitterOn(lightMaterial_, on_);
 }
 
-PoseSpec Lamp::HeldPose(const Player& player, const PlayerPose& pose) {
-    // Camera-space offset (right, down, forward) so the lamp sits in the lower right of the view.
+PoseSpec Item::HeldPose(const Player& player, const PlayerPose& pose) {
+    // Camera-space offset (right, down, forward) so the item sits in the lower right of the view.
     Camera cam;
     cam.position = player.EyePosition(pose);
     cam.yawRadians = pose.yaw;
@@ -168,11 +170,11 @@ PoseSpec Lamp::HeldPose(const Player& player, const PlayerPose& pose) {
     return p;
 }
 
-void Lamp::Tick(const Player& player, const CollisionWorld* colliders) {
+void Item::Tick(const Player& player, const CollisionWorld* colliders) {
     previous_ = current_;
-    if (state_ == LampState::Held) {
+    if (state_ == ItemState::Held) {
         current_ = HeldPose(player, player.Current());
-        if (colliders != nullptr) {
+        if (colliders != nullptr && !hidesWhenCarried_) {
             // Sweep the housing volume from the eye to the held pose; stop where it is free of solids.
             const Vec3 lift{0.0f, kHousingCentreHeight, 0.0f};
             const Vec3 eye = player.EyePosition(player.Current());
@@ -182,8 +184,8 @@ void Lamp::Tick(const Player& player, const CollisionWorld* colliders) {
     }
 }
 
-PoseSpec Lamp::PoseAt(float alpha) const {
-    if (state_ == LampState::Placed) {
+PoseSpec Item::PoseAt(float alpha) const {
+    if (state_ == ItemState::Placed) {
         return current_;
     }
     PoseSpec p;
@@ -407,31 +409,6 @@ void Threat::SetDistance(float distance) {
     stateSeconds_ = 0.0f;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Objective
-
-const char* ObjectivePhaseName(ObjectivePhase phase) {
-    switch (phase) {
-        case ObjectivePhase::Introduction: return "introduction";
-        case ObjectivePhase::LampAcquired: return "lamp_acquired";
-        case ObjectivePhase::LampPlaced: return "lamp_placed";
-        case ObjectivePhase::LampRetrieved: return "lamp_retrieved";
-        case ObjectivePhase::Escaped: return "escaped";
-    }
-    return "unknown";
-}
-
-const char* ObjectiveText(ObjectivePhase phase) {
-    switch (phase) {
-        case ObjectivePhase::Introduction: return "Find the lamp and pick it up";
-        case ObjectivePhase::LampAcquired: return "Carry the lamp to the shelf in the inspection room";
-        case ObjectivePhase::LampPlaced: return "Check the mirror, then take the lamp back";
-        case ObjectivePhase::LampRetrieved: return "Return to the exit in the equipment room with the lamp";
-        case ObjectivePhase::Escaped: return "You made it out";
-    }
-    return "";
-}
-
 PoseSpec Threat::At(float alpha) const {
     PoseSpec p;
     p.position = math::Lerp(previous_.position, current_.position, alpha);
@@ -441,16 +418,48 @@ PoseSpec Threat::At(float alpha) const {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Fan
+
+void Fan::Tick(float dt) {
+    previousAngle_ = angle_;
+    const float target = powered_ ? TargetSpeed() : 0.0f;
+    const float rate = TargetSpeed() / kSpinSeconds;
+    if (speed_ < target) speed_ = std::min(target, speed_ + rate * dt);
+    else if (speed_ > target) speed_ = std::max(target, speed_ - rate * dt);
+    angle_ += speed_ * dt;
+    const float turn = 2.0f * math::kPi;
+    if (angle_ >= turn) angle_ -= turn * std::floor(angle_ / turn);
+}
+
+// ---------------------------------------------------------------------------------------------
 // World
 
 World::World(TwoRoomLevel level, ThreatBehaviour behaviour)
-    : level_(std::move(level)), door_(level_.door), lamp_(level_, level_.floorSocket), threat_(level_.threatPath, level_.threatSpeed), behaviour_(behaviour) {
+    : level_(std::move(level)), threat_(level_.threatPath, level_.threatSpeed), behaviour_(behaviour) {
+    for (const LevelDoor& d : level_.doors) doors_.push_back(Door(d));
+    if (doors_.empty()) doors_.push_back(Door(level_.door));  // A level without doors still has the proof's accessor.
+    for (const LevelItem& it : level_.items) {
+        const SocketSpec* start = FindSocket(it.startSocket);
+        items_.push_back(Item(it, start != nullptr ? *start : SocketSpec{}));
+    }
+    for (std::size_t i = 0; i < items_.size(); ++i) {
+        if (items_[i].HasLight()) {
+            lampIndex_ = i;
+            break;
+        }
+    }
+    for (const LevelFan& f : level_.fans) fans_.push_back(Fan(f));
+    circuits_ = level_.circuits;
     colliders_.Build(GetScene(), level_.colliders);
-    colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, 0.0f));
+    for (const Door& d : doors_) colliders_.SetTransform(GetScene(), d.Handle().id, DoorTransform(d.Handle(), 0.0f));
     player_.Reset({level_.playerStart.position, level_.playerStart.yaw, level_.playerStart.pitch});
     threat_.SetBehaviour(behaviour_);
-    lastLampPose_ = lamp_.Current();
+    lastDoorAngles_.assign(doors_.size(), 0.0f);
+    lastItemPoses_.resize(items_.size());
+    lastItemHidden_.assign(items_.size(), false);
+    lastFanAngles_.assign(fans_.size(), 0.0f);
     lastThreatPose_ = threat_.Current();
+    EvaluateCircuits(true);
     SaveCheckpoint();
     // The static level parks the threat at the check position; the simulation starts on the path.
     WriteRenderScene(GetScene(), 0.0f);
@@ -459,13 +468,24 @@ World::World(TwoRoomLevel level, ThreatBehaviour behaviour)
 
 void World::Reset() {
     player_.Reset({level_.playerStart.position, level_.playerStart.yaw, level_.playerStart.pitch});
-    door_ = Door(level_.door);
-    lamp_ = Lamp(level_, level_.floorSocket);
-    GetScene().SetEmitterOn(level_.lampMaterial, true);  // The fixture starts switched on.
+    doors_.clear();
+    for (const LevelDoor& d : level_.doors) doors_.push_back(Door(d));
+    if (doors_.empty()) doors_.push_back(Door(level_.door));
+    items_.clear();
+    for (const LevelItem& it : level_.items) {
+        const SocketSpec* start = FindSocket(it.startSocket);
+        items_.push_back(Item(it, start != nullptr ? *start : SocketSpec{}));
+        if (it.hasLight) GetScene().SetEmitterOn(it.lightMaterial, true);  // Lit items start switched on.
+    }
+    fans_.clear();
+    for (const LevelFan& f : level_.fans) fans_.push_back(Fan(f));
+    circuits_ = level_.circuits;
     threat_ = Threat(level_.threatPath, level_.threatSpeed);
     threat_.SetBehaviour(behaviour_);
-    colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, 0.0f));
-    phase_ = ObjectivePhase::Introduction;
+    for (const Door& d : doors_) colliders_.SetTransform(GetScene(), d.Handle().id, DoorTransform(d.Handle(), 0.0f));
+    completedSteps_ = 0;
+    phase_ = "introduction";
+    EvaluateCircuits(true);
     SaveCheckpoint();
     catches_ = 0;
     restarts_ = 0;
@@ -476,33 +496,83 @@ void World::Reset() {
     ticks_ = 0;
     doorBlocks_ = 0;
     wroteOnce_ = false;
-    lastDoorAngle_ = 0.0f;
-    lastLampPose_ = lamp_.Current();
+    lastDoorAngles_.assign(doors_.size(), 0.0f);
+    lastItemPoses_.assign(items_.size(), PoseSpec{});
+    lastItemHidden_.assign(items_.size(), false);
+    lastFanAngles_.assign(fans_.size(), 0.0f);
     lastThreatPose_ = threat_.Current();
     WriteRenderScene(GetScene(), 0.0f);
 }
 
+const SocketSpec* World::FindSocket(const std::string& name) const {
+    for (const SocketSpec& s : level_.sockets) {
+        if (s.name == name) return &s;
+    }
+    return nullptr;
+}
+
+const Item* World::FindItem(const std::string& id) const {
+    for (const Item& it : items_) {
+        if (it.Id() == id) return &it;
+    }
+    return nullptr;
+}
+
+Item* World::HeldItem() {
+    for (Item& it : items_) {
+        if (it.State() == ItemState::Held) return &it;
+    }
+    return nullptr;
+}
+
+const Item* World::HeldItem() const {
+    for (const Item& it : items_) {
+        if (it.State() == ItemState::Held) return &it;
+    }
+    return nullptr;
+}
+
+bool World::CircuitOn(const std::string& id) const {
+    for (const CircuitState& c : circuits_) {
+        if (c.id == id) return c.on;
+    }
+    return false;
+}
+
+const std::string& World::ObjectiveLine() const {
+    if (Complete()) return level_.objectiveCompleteText;
+    return level_.steps[completedSteps_].text;
+}
+
 void World::SaveCheckpoint() {
-    checkpoint_.phase = phase_;
+    checkpoint_.completedSteps = completedSteps_;
     checkpoint_.player = player_.Current();
-    checkpoint_.door = door_.State();
-    checkpoint_.doorAngle = door_.Angle();
-    checkpoint_.lamp = lamp_.Snapshot();
+    checkpoint_.doors.clear();
+    for (const Door& d : doors_) checkpoint_.doors.emplace_back(d.State(), d.Angle());
+    checkpoint_.items.clear();
+    for (const Item& it : items_) checkpoint_.items.push_back(it.Snapshot());
+    checkpoint_.fans.clear();
+    for (const Fan& f : fans_) checkpoint_.fans.emplace_back(f.Angle(), f.Speed());
 }
 
 void World::RestartFromCheckpoint() {
-    phase_ = checkpoint_.phase;
+    completedSteps_ = checkpoint_.completedSteps;
+    phase_ = completedSteps_ == 0 ? "introduction" : level_.steps[completedSteps_ - 1].id;
     player_.Reset(checkpoint_.player);
-    door_.Restore(checkpoint_.door, checkpoint_.doorAngle);
-    colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, door_.Angle()));
-    lamp_.Restore(checkpoint_.lamp, GetScene());
+    for (std::size_t i = 0; i < doors_.size() && i < checkpoint_.doors.size(); ++i) {
+        doors_[i].Restore(checkpoint_.doors[i].first, checkpoint_.doors[i].second);
+        colliders_.SetTransform(GetScene(), doors_[i].Handle().id, DoorTransform(doors_[i].Handle(), doors_[i].Angle()));
+    }
+    for (std::size_t i = 0; i < items_.size() && i < checkpoint_.items.size(); ++i) items_[i].Restore(checkpoint_.items[i], GetScene());
+    for (std::size_t i = 0; i < fans_.size() && i < checkpoint_.fans.size(); ++i) fans_[i].Restore(checkpoint_.fans[i].first, checkpoint_.fans[i].second);
+    EvaluateCircuits(true);
     // The machine goes back to its round; nothing is ever staged into the player's view.
     threat_ = Threat(level_.threatPath, level_.threatSpeed);
     threat_.SetBehaviour(behaviour_);
     ++restarts_;
     justRestarted_ = true;
-    Event(std::format("tick {}: restart {} from the checkpoint '{}' (player at {:.2f}, {:.2f}, {:.2f})", ticks_, restarts_, ObjectivePhaseName(phase_),
-                      checkpoint_.player.position.x, checkpoint_.player.position.y, checkpoint_.player.position.z));
+    Event(std::format("tick {}: restart {} from the checkpoint '{}' (player at {:.2f}, {:.2f}, {:.2f})", ticks_, restarts_, phase_, checkpoint_.player.position.x,
+                      checkpoint_.player.position.y, checkpoint_.player.position.z));
     WriteRenderScene(GetScene(), 1.0f);
 }
 
@@ -510,40 +580,64 @@ ThreatSenses World::Sense() const {
     ThreatSenses s;
     const PlayerPose& pose = player_.Current();
     s.playerFeet = pose.position;
-    s.lampHeld = lamp_.State() == LampState::Held;
-    s.lampOn = lamp_.IsOn();
+    if (!items_.empty() && items_[lampIndex_].HasLight()) {
+        s.lampHeld = items_[lampIndex_].State() == ItemState::Held;
+        s.lampOn = items_[lampIndex_].IsOn();
+    }
     const Vec3 head = threat_.Current().position + Vec3{0.0f, 1.35f, 0.0f};
     s.lineOfSight = colliders_.SegmentClear(head, player_.EyePosition(pose));
     return s;
 }
 
-void World::UpdateObjective() {
-    const ObjectivePhase before = phase_;
-    const bool held = lamp_.State() == LampState::Held;
-    switch (phase_) {
-        case ObjectivePhase::Introduction:
-            if (held) phase_ = ObjectivePhase::LampAcquired;
-            break;
-        case ObjectivePhase::LampAcquired:
-            if (!held && lamp_.SocketName() == level_.shelfSocket.name) phase_ = ObjectivePhase::LampPlaced;
-            break;
-        case ObjectivePhase::LampPlaced:
-            if (held) phase_ = ObjectivePhase::LampRetrieved;
-            break;
-        case ObjectivePhase::LampRetrieved:
-            if (held && level_.hasExit) {
-                Vec3 to = player_.Current().position - level_.exitPosition;
-                to.y = 0.0f;
-                if (math::Length(to) <= level_.exitRadius) phase_ = ObjectivePhase::Escaped;
+// Circuits powered by an item follow where the item sits; their fixtures, fans, and doors follow them.
+void World::EvaluateCircuits(bool initial) {
+    for (CircuitState& c : circuits_) {
+        if (c.poweredByItem.empty()) continue;
+        const Item* item = FindItem(c.poweredByItem);
+        const bool on = item != nullptr && item->State() == ItemState::Placed && item->SocketName() == c.poweredBySocket;
+        if (on == c.on && !initial) continue;
+        const bool changed = on != c.on;
+        c.on = on;
+        for (const auto& [material, circuit] : level_.emitterCircuits) {
+            if (circuit == c.id) GetScene().SetEmitterOn(material, on);
+        }
+        if (changed) Event(std::format("tick {}: circuit '{}' {}", ticks_, c.id, on ? "on" : "off"));
+        for (Door& d : doors_) {
+            if (d.OpensWithCircuit() == c.id && on && changed && d.State() != DoorState::Open && d.State() != DoorState::Opening) {
+                d.Interact();
+                Event(std::format("tick {}: door '{}' opens with circuit '{}'", ticks_, d.Id(), c.id));
             }
-            break;
-        case ObjectivePhase::Escaped:
-            break;
+        }
     }
-    if (phase_ != before) {
+    for (Fan& f : fans_) f.SetPowered(CircuitOn(f.Level().circuit));
+}
+
+void World::UpdateObjective() {
+    if (Complete()) return;
+    const ObjectiveStep& step = level_.steps[completedSteps_];
+    bool done = false;
+    if (step.kind == "take") {
+        const Item* it = FindItem(step.item);
+        done = it != nullptr && it->State() == ItemState::Held;
+    } else if (step.kind == "place") {
+        const Item* it = FindItem(step.item);
+        done = it != nullptr && it->State() == ItemState::Placed && it->SocketName() == step.socket;
+    } else if (step.kind == "reach") {
+        Vec3 to = player_.Current().position - step.markerPosition;
+        to.y = 0.0f;
+        done = math::Length(to) <= step.radius;
+        if (!step.requiresItem.empty()) {
+            const Item* it = FindItem(step.requiresItem);
+            done = done && it != nullptr && it->State() == ItemState::Held;
+        }
+    }
+    if (done) {
+        const std::string before = phase_;
+        ++completedSteps_;
+        phase_ = step.id;
         justAdvanced_ = true;
         SaveCheckpoint();
-        Event(std::format("tick {}: objective {} -> {}", ticks_, ObjectivePhaseName(before), ObjectivePhaseName(phase_)));
+        Event(std::format("tick {}: objective {} -> {}", ticks_, before, phase_));
     }
 }
 
@@ -556,16 +650,20 @@ void World::HashTick() {
         }
     };
     auto mixFloat = [&](float f) { mix(&f, sizeof(f)); };
-    const std::uint8_t phase = static_cast<std::uint8_t>(phase_);
-    const std::uint8_t threatState = static_cast<std::uint8_t>(threat_.State());
-    const std::uint8_t door = static_cast<std::uint8_t>(door_.State());
-    const std::uint8_t lamp = static_cast<std::uint8_t>((lamp_.State() == LampState::Held ? 1 : 0) | (lamp_.IsOn() ? 2 : 0));
+    auto mixU8 = [&](std::uint8_t v) { mix(&v, 1); };
     mix(&ticks_, sizeof(ticks_));
-    mix(&phase, 1);
-    mix(&threatState, 1);
-    mix(&door, 1);
-    mix(&lamp, 1);
-    mixFloat(door_.Angle());
+    mixU8(static_cast<std::uint8_t>(completedSteps_));
+    mixU8(static_cast<std::uint8_t>(threat_.State()));
+    for (const Door& d : doors_) {
+        mixU8(static_cast<std::uint8_t>(d.State()));
+        mixFloat(d.Angle());
+    }
+    for (const Item& it : items_) {
+        mixU8(static_cast<std::uint8_t>((it.State() == ItemState::Held ? 1 : 0) | (it.IsOn() ? 2 : 0)));
+        mixU8(static_cast<std::uint8_t>(it.SocketName().size()));
+    }
+    for (const Fan& f : fans_) mixFloat(f.Speed());
+    for (const CircuitState& c : circuits_) mixU8(c.on ? 1 : 0);
     const PlayerPose& p = player_.Current();
     mixFloat(p.position.x);
     mixFloat(p.position.y);
@@ -599,13 +697,18 @@ std::optional<InteractionTarget> World::CurrentInteraction() const {
     cam.yawRadians = pose.yaw;
     cam.pitchRadians = pose.pitch;
     const Vec3 view = cam.Forward();
-    auto consider = [&](const std::string& name, const Vec3& point, float reach) -> std::optional<InteractionTarget> {
+    auto consider = [&](InteractionTarget::Kind kind, const std::string& name, const std::string& text, const Vec3& point,
+                        float reach) -> std::optional<InteractionTarget> {
         const Vec3 to = point - eye;
         const float distance = math::Length(to);
         if (distance > reach || distance <= 0.0f) return std::nullopt;
         const float alignment = math::Dot(to / distance, view);
         if (alignment < 0.6f) return std::nullopt;  // Must look at the target (within ~53 degrees).
-        InteractionTarget t{name, distance};
+        InteractionTarget t;
+        t.kind = kind;
+        t.name = name;
+        t.text = text;
+        t.distance = distance;
         t.alignment = alignment;
         return t;
     };
@@ -613,16 +716,29 @@ std::optional<InteractionTarget> World::CurrentInteraction() const {
     auto pick = [&](std::optional<InteractionTarget> candidate) {
         if (candidate && (!best || candidate->alignment > best->alignment)) best = candidate;
     };
-    // The leaf is tall: aim at it at eye height (within the leaf) so standing close and looking
-    // straight ahead still targets it.
-    Vec3 doorPoint = level_.door.centre;
-    doorPoint.y = std::clamp(eye.y, level_.door.centre.y - 0.8f, level_.door.centre.y + 0.8f);
-    pick(consider("door", doorPoint, 2.0f));
-    if (lamp_.State() == LampState::Placed) {
-        pick(consider("lamp", lamp_.Current().position + Vec3{0.0f, 0.1f, 0.0f}, Lamp::kReach));
-    } else {
-        pick(consider(level_.shelfSocket.name, level_.shelfSocket.position, Lamp::kReach));
-        pick(consider(level_.floorSocket.name, level_.floorSocket.position, Lamp::kReach));
+    for (const Door& d : doors_) {
+        if (d.Locked()) continue;
+        // The leaf is tall: aim at it at eye height (within the leaf) so standing close and looking
+        // straight ahead still targets it.
+        Vec3 doorPoint = d.Handle().centre;
+        doorPoint.y = std::clamp(eye.y, d.Handle().centre.y - 0.8f, d.Handle().centre.y + 0.8f);
+        const bool opening = d.State() == DoorState::Closed || d.State() == DoorState::Closing;
+        pick(consider(InteractionTarget::Kind::Door, d.Id(), opening ? "Open the door" : "Close the door", doorPoint, 2.0f));
+    }
+    const Item* held = HeldItem();
+    for (const Item& it : items_) {
+        if (it.State() != ItemState::Placed || held != nullptr) continue;  // One item in hand at a time.
+        pick(consider(InteractionTarget::Kind::Item, it.Id(), "Take the " + it.Text(), it.Current().position + Vec3{0.0f, 0.1f, 0.0f}, Item::kReach));
+    }
+    if (held != nullptr) {
+        for (const SocketSpec& s : level_.sockets) {
+            if (std::find(s.accepts.begin(), s.accepts.end(), held->Id()) == s.accepts.end()) continue;
+            bool occupied = false;
+            for (const Item& it : items_) occupied = occupied || (it.State() == ItemState::Placed && it.SocketName() == s.name);
+            if (occupied) continue;
+            const std::string text = held->HasLight() ? "Place the " + held->Text() + " on the " + s.text : "Put the " + held->Text() + " in the " + s.text;
+            pick(consider(InteractionTarget::Kind::Socket, s.name, text, s.position, Item::kReach));
+        }
     }
     return best;
 }
@@ -632,67 +748,106 @@ void World::Tick(const InputFrame& input, float dt) {
     justAdvanced_ = false;
     if (input.interactPressed) {
         if (const auto target = CurrentInteraction()) {
-            if (target->name == "door") {
-                door_.Interact();
-                log::Debug("tick {}: door -> {}", ticks_, DoorStateName(door_.State()));
-            } else if (target->name == "lamp") {
-                lamp_.PickUp();
-                log::Debug("tick {}: lamp picked up", ticks_);
-            } else if (target->name == level_.shelfSocket.name) {
-                lamp_.Place(level_.shelfSocket);
-                log::Debug("tick {}: lamp placed on {}", ticks_, target->name);
-            } else if (target->name == level_.floorSocket.name) {
-                lamp_.Place(level_.floorSocket);
-                log::Debug("tick {}: lamp placed on {}", ticks_, target->name);
+            if (target->kind == InteractionTarget::Kind::Door) {
+                for (Door& d : doors_) {
+                    if (d.Id() == target->name) {
+                        d.Interact();
+                        log::Debug("tick {}: door '{}' -> {}", ticks_, d.Id(), DoorStateName(d.State()));
+                    }
+                }
+            } else if (target->kind == InteractionTarget::Kind::Item) {
+                for (Item& it : items_) {
+                    if (it.Id() == target->name) {
+                        it.PickUp();
+                        log::Debug("tick {}: {} picked up", ticks_, it.Id());
+                    }
+                }
+            } else if (Item* held = HeldItem()) {
+                if (const SocketSpec* s = FindSocket(target->name)) {
+                    held->Place(*s);
+                    log::Debug("tick {}: {} placed on {}", ticks_, held->Id(), s->name);
+                }
             }
         }
     }
-    if (input.lampPressed) {
-        lamp_.Toggle(GetScene());
-        log::Debug("tick {}: lamp {}", ticks_, lamp_.IsOn() ? "on" : "off");
+    if (input.lampPressed && !items_.empty() && items_[lampIndex_].HasLight()) {
+        items_[lampIndex_].Toggle(GetScene());
+        log::Debug("tick {}: lamp {}", ticks_, items_[lampIndex_].IsOn() ? "on" : "off");
     }
     player_.Tick(input, dt, &colliders_);
-    door_.Tick(dt);
-    // The leaf's collision follows its state; a leaf closing into the player swings back open.
-    colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, door_.Angle()));
-    if (door_.State() == DoorState::Closing && colliders_.CapsuleOverlaps(player_.Current().position, Player::kCapsule)) {
-        door_.Block();
-        colliders_.SetTransform(GetScene(), level_.door.id, DoorTransform(level_.door, door_.Angle()));
-        ++doorBlocks_;
-        log::Debug("tick {}: door blocked by the player, reopening", ticks_);
+    for (Door& d : doors_) {
+        d.Tick(dt);
+        // The leaf's collision follows its state; a leaf closing into the player swings back open.
+        colliders_.SetTransform(GetScene(), d.Handle().id, DoorTransform(d.Handle(), d.Angle()));
+        if (d.State() == DoorState::Closing && colliders_.CapsuleOverlaps(player_.Current().position, Player::kCapsule)) {
+            d.Block();
+            colliders_.SetTransform(GetScene(), d.Handle().id, DoorTransform(d.Handle(), d.Angle()));
+            ++doorBlocks_;
+            log::Debug("tick {}: door '{}' blocked by the player, reopening", ticks_, d.Id());
+        }
     }
     const ThreatState threatBefore = threat_.State();
     threat_.Tick(dt, Sense(), &colliders_);
     if (threat_.State() != threatBefore) {
         Event(std::format("tick {}: threat {} -> {}", ticks_, ThreatStateName(threatBefore), ThreatStateName(threat_.State())));
     }
-    lamp_.Tick(player_, &colliders_);
+    for (Item& it : items_) it.Tick(player_, &colliders_);
+    EvaluateCircuits(false);
+    for (Fan& f : fans_) f.Tick(dt);
     UpdateObjective();
-    if (threat_.CaughtPlayer() && phase_ != ObjectivePhase::Escaped) {
+    if (threat_.CaughtPlayer() && !Complete()) {
         ++catches_;
         Event(std::format("tick {}: caught ({}) at ({:.2f}, {:.2f}, {:.2f})", ticks_, catches_, player_.Current().position.x, player_.Current().position.y,
                           player_.Current().position.z));
         RestartFromCheckpoint();
-        lamp_.Tick(player_, &colliders_);
+        for (Item& it : items_) it.Tick(player_, &colliders_);
     }
     ++ticks_;
     HashTick();
 }
 
+Mat4 World::ItemTransform(const Item& item, const PoseSpec& pose, const PlayerPose& player) const {
+    if (item.State() == ItemState::Held && item.HidesWhenCarried()) {
+        // Pocketed: inside the torso box, where the closed body geometry hides it.
+        const PoseSpec feet{player.position, player.yaw, 0.0f};
+        return PlayerTorsoTransform(feet) * Mat4::Translation({0.0f, -0.1f, 0.0f});
+    }
+    return item.HasLight() ? LampHousingTransform(pose) : ItemBodyTransform(pose, item.Half());
+}
+
 bool World::WriteRenderScene(Scene& scene, float alpha) {
     bool changed = false;
-    const float doorAngle = door_.AngleAt(alpha);
-    if (!wroteOnce_ || doorAngle != lastDoorAngle_) {
-        scene.SetTransform(level_.door.id, DoorTransform(level_.door, doorAngle));
-        lastDoorAngle_ = doorAngle;
-        changed = true;
+    for (std::size_t i = 0; i < doors_.size(); ++i) {
+        const float doorAngle = doors_[i].AngleAt(alpha);
+        if (!wroteOnce_ || doorAngle != lastDoorAngles_[i]) {
+            scene.SetTransform(doors_[i].Handle().id, DoorTransform(doors_[i].Handle(), doorAngle));
+            lastDoorAngles_[i] = doorAngle;
+            changed = true;
+        }
     }
-    const PoseSpec lampPose = lamp_.PoseAt(alpha);
-    if (!wroteOnce_ || !SamePose(lampPose, lastLampPose_)) {
-        scene.SetTransform(level_.lampHousing, LampHousingTransform(lampPose));
-        scene.SetTransform(level_.lampFace, LampFaceTransform(lampPose, level_.lampFaceOffset));
-        lastLampPose_ = lampPose;
-        changed = true;
+    const PlayerPose playerPose = player_.At(alpha);
+    for (std::size_t i = 0; i < items_.size(); ++i) {
+        const Item& it = items_[i];
+        const PoseSpec pose = it.PoseAt(alpha);
+        const bool hidden = it.State() == ItemState::Held && it.HidesWhenCarried();
+        if (!wroteOnce_ || !SamePose(pose, lastItemPoses_[i]) || hidden != lastItemHidden_[i] || hidden) {
+            scene.SetTransform(level_.items[i].body, ItemTransform(it, pose, playerPose));
+            if (it.HasLight()) scene.SetTransform(level_.items[i].face, LampFaceTransform(pose, it.FaceOffset()));
+            lastItemPoses_[i] = pose;
+            lastItemHidden_[i] = hidden;
+            changed = true;
+        }
+    }
+    for (std::size_t i = 0; i < fans_.size(); ++i) {
+        const float angle = fans_[i].AngleAt(alpha);
+        if (!wroteOnce_ || angle != lastFanAngles_[i]) {
+            const LevelFan& f = level_.fans[i];
+            const Mat4 spin = Mat4::Translation(f.centre) * Mat4::RotationAxis(f.axis, angle);
+            scene.SetTransform(f.hub, spin * f.hubLocal);
+            for (std::size_t k = 0; k < f.blades.size(); ++k) scene.SetTransform(f.blades[k], spin * f.bladeLocal[k]);
+            lastFanAngles_[i] = angle;
+            changed = true;
+        }
     }
     const PoseSpec threatPose = threat_.At(alpha);
     if (!wroteOnce_ || !SamePose(threatPose, lastThreatPose_)) {
@@ -702,8 +857,7 @@ bool World::WriteRenderScene(Scene& scene, float alpha) {
         changed = true;
     }
     if (level_.playerTorso.value != 0) {
-        const PlayerPose pose = player_.At(alpha);
-        const PoseSpec feet{pose.position, pose.yaw, 0.0f};
+        const PoseSpec feet{playerPose.position, playerPose.yaw, 0.0f};
         if (!wroteOnce_ || !SamePose(feet, lastBodyPose_)) {
             scene.SetTransform(level_.playerTorso, PlayerTorsoTransform(feet));
             scene.SetTransform(level_.playerHandLeft, PlayerHandTransform(feet, false));

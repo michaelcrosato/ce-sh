@@ -36,8 +36,13 @@ bool HasCue(const std::vector<Command>& cmds, const std::string& text) {
 WorldSnapshot Base() {
     WorldSnapshot s;
     s.playerFeet = {2.5f, 0.0f, 1.2f};
-    s.doorPosition = {4.0f, 1.0f, 1.2f};
+    DoorSnapshot door;
+    door.position = {4.0f, 1.0f, 1.2f};
+    s.doors = {door};
     s.lampPosition = {3.0f, 0.05f, 0.9f};
+    ItemSnapshot lamp;
+    lamp.position = s.lampPosition;
+    s.items = {lamp};
     s.threatPosition = {6.0f, 0.0f, 3.0f};
     s.fixtures = {{"fixture_a", {2.0f, 2.79f, 2.0f}, true, ClipId::FixtureHum},
                   {"hall_emergency", {6.8f, 2.79f, 5.0f}, true, ClipId::EmergencyHum},
@@ -167,25 +172,23 @@ LC_TEST(audio_director_door_lamp_and_footstep_events_follow_the_world_state) {
     (void)d.Update(s, 1.0f / 60.0f);
 
     // The door starts opening: creak and cue; reaches open: soft thud, no "shuts" cue.
-    s.doorMoving = true;
-    s.doorClosed = false;
+    s.doors[0].moving = true;
+    s.doors[0].closed = false;
     std::vector<Command> c = d.Update(s, 1.0f / 60.0f);
     LC_CHECK_EQ(CountClip(c, ClipId::DoorCreak, Command::Kind::PlayOneShot), 1u);
     LC_CHECK(HasCue(c, "The door creaks"));
     c = d.Update(s, 1.0f / 60.0f);  // Still moving: nothing new.
     LC_CHECK_EQ(CountKind(c, Command::Kind::PlayOneShot), 0u);
-    s.doorMoving = false;
-    s.doorOpen = true;
+    s.doors[0].moving = false;
     c = d.Update(s, 1.0f / 60.0f);
     LC_CHECK_EQ(CountClip(c, ClipId::DoorThud, Command::Kind::PlayOneShot), 1u);
     LC_CHECK(!HasCue(c, "The door shuts"));
     // Closing back: creak, then the shut cue.
-    s.doorMoving = true;
-    s.doorOpen = false;
+    s.doors[0].moving = true;
     c = d.Update(s, 1.0f / 60.0f);
     LC_CHECK_EQ(CountClip(c, ClipId::DoorCreak, Command::Kind::PlayOneShot), 1u);
-    s.doorMoving = false;
-    s.doorClosed = true;
+    s.doors[0].moving = false;
+    s.doors[0].closed = true;
     c = d.Update(s, 1.0f / 60.0f);
     LC_CHECK_EQ(CountClip(c, ClipId::DoorThud, Command::Kind::PlayOneShot), 1u);
     LC_CHECK(HasCue(c, "The door shuts"));
@@ -204,9 +207,31 @@ LC_TEST(audio_director_door_lamp_and_footstep_events_follow_the_world_state) {
     LC_CHECK_EQ(CountClip(c, ClipId::LampClick, Command::Kind::PlayOneShot), 1u);
     LC_CHECK(HasCue(c, "Click: the lamp is off"));
     s.lampHeld = true;
+    s.items[0].held = true;
     c = d.Update(s, 1.0f / 60.0f);
     LC_CHECK_EQ(CountClip(c, ClipId::LampHandle, Command::Kind::PlayOneShot), 1u);
     LC_CHECK_EQ(CountClip(c, ClipId::LampClick, Command::Kind::PlayOneShot), 0u);
+    // A fan: the loop starts when it turns, follows its speed, and stops with it.
+    FanSnapshot fan;
+    fan.position = {19.5f, 1.8f, 6.0f};
+    fan.speedFraction = 0.0f;
+    s.fans = {fan};
+    c = d.Update(s, 1.0f / 60.0f);
+    LC_CHECK(FindKey(c, Command::Kind::StartLoop, "fan:0") == nullptr);
+    s.fans[0].speedFraction = 0.5f;
+    c = d.Update(s, 1.0f / 60.0f);
+    const Command* fanStart = FindKey(c, Command::Kind::StartLoop, "fan:0");
+    LC_REQUIRE(fanStart != nullptr);
+    LC_CHECK_EQ(fanStart->clip, ClipId::FanLoop);
+    LC_CHECK_NEAR(fanStart->gain, 0.5f, 1e-6);
+    s.fans[0].speedFraction = 1.0f;
+    c = d.Update(s, 1.0f / 60.0f);
+    const Command* fanMove = FindKey(c, Command::Kind::MoveLoop, "fan:0");
+    LC_REQUIRE(fanMove != nullptr);
+    LC_CHECK_NEAR(fanMove->gain, 1.0f, 1e-6);
+    s.fans[0].speedFraction = 0.0f;
+    c = d.Update(s, 1.0f / 60.0f);
+    LC_CHECK(FindKey(c, Command::Kind::StopLoop, "fan:0") != nullptr);
 
     // Footsteps: every 0.62 m, alternating variants, never occluded.
     std::size_t steps = 0;
@@ -297,8 +322,8 @@ LC_TEST(audio_system_without_a_device_keeps_the_cues_and_drops_nothing_else) {
     Listener l;
     l.position = s.playerFeet + Vec3{0.0f, 1.6f, 0.0f};
     audio.Update(l, d.Update(s, 1.0f / 60.0f), nullptr);
-    s.doorMoving = true;
-    s.doorClosed = false;
+    s.doors[0].moving = true;
+    s.doors[0].closed = false;
     audio.Update(l, d.Update(s, 1.0f / 60.0f), [](Vec3, Vec3) { return true; });
     const std::vector<std::string> cues = audio.TakeCues();
     LC_REQUIRE(cues.size() == 1u);
