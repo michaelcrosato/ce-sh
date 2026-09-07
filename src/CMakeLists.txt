@@ -1,6 +1,7 @@
 add_subdirectory(core)
 add_subdirectory(scene)
 add_subdirectory(game)
+add_subdirectory(audio)
 if(WIN32)
     add_subdirectory(platform)
     add_subdirectory(graphics)

@@ -15,6 +15,8 @@ State at milestone M1. Everything below exists in the code; nothing is a plan.
 | `lc_render` | `src/render` | `SceneGpu` (geometry residency, BLAS per mesh, TLAS, per-frame instance/material/emitter tables), `Renderer` (diagnostic pass, path tracer in raw and reference modes, the denoised path: guided trace, NRD, compose, resampling; accumulation, readback, layout probe), `NrdDenoiser` (D3D12 backend for NRD's API), capture and sequence writers | `lc_graphics`, `lc_scene`, `NRD` |
 | `lc_scene` (scene files) | `src/scene/scene_file.*` | Versioned JSON scene files: parse, validate every rule and limit, asset-root containment, then build the level through the room kit; `assets/scenes/two_room.json` is the proof level | `lc_core` (JSON reader) |
 | `lc_game` | `src/game` | `Simulation` (fixed 60 Hz clock), `InputFrame`, `Replay` (input segments + checks), `CollisionWorld` (yaw-only boxes, capsule push-out, sphere sweep, segment tests), `World` (player with the capsule, door that never traps, lamp fixture with the sweep, threat, placeholder body, interaction, reset) | `lc_scene`, `lc_core` |
+| `lc_miniaudio` | `external/miniaudio` (built by `src/audio/CMakeLists.txt`) | miniaudio compiled once as C: WASAPI backend only, no decoding, encoding, generators, or resource manager | nothing |
+| `lc_audio` | `src/audio` | Generated clips with provenance (`clips.*`), the sound rules (`director.*`: inverse-square attenuation, pan from the listener's right axis, the occlusion factor, events that follow the world state, text cues), and the device layer (`audio_system.*`: a 24-voice pool on miniaudio, volumes per category, pause) | `lc_core`, `lc_miniaudio` |
 | `lc_imgui` | `external/imgui` (built by `src/ui/CMakeLists.txt`) | Dear ImGui core with the Win32 and D3D12 backends, third-party code compiled without `/WX` | `d3dcompiler` (backend start-up) |
 | `lc_ui` | `src/ui` | `ui::Ui`: interface frame (prompt, objective, cue, controls card, pause menu with `ui::Settings`, diagnostic panel) recorded into the back buffer after the present copy; the window message hook | `lc_imgui`, `lc_graphics`, `lc_platform` |
 | `LastCircuit.exe` | `src/app` | Modes (list adapters, windowed, headless, play, record, replay, validate, resize test, capture, stats, benchmark, reload test), environment report, main loop, interface state (pause, settings, diagnostics) | everything above |
@@ -26,12 +28,19 @@ The scene and game layers (`lc_scene`, `lc_game`) contain no D3D12 types. The re
 ## Data flow per frame (spec §9 order)
 
 ```text
-Window::PumpMessages            window events; raw mouse deltas and key edges accumulate until ClearInput
+Window::PumpMessages            window events (the interface hook sees every message first); raw mouse deltas and key
+                                edges accumulate until a simulation tick has read them (frames outnumber ticks);
+                                F1 and R consume their own edges per frame
 Simulation::Advance             live play: real time -> whole 60 Hz ticks (capped at 0.25 s per frame), remainder = alpha
   or RunTicks                   replay: exactly one tick per frame, or all ticks up to --stop-at-tick before rendering
-World::Tick                     per tick: interaction edges (door, lamp pick-up/place/toggle), player, door, threat, lamp
+World::Tick                     per tick: interaction edges (door, lamp pick-up/place/toggle), player against the
+                                colliders, door (blocked leaves swing back), threat, lamp (swept)
 World::WriteRenderScene(alpha)  interpolated poses -> Scene::SetTransform only for entities whose pose changed
+audio::Director::Update         world snapshot (door/lamp/threat state, emitter states and transforms) -> loop and
+                                one-shot commands and text cues; AudioSystem::Update refreshes every voice's level and
+                                pan for the camera listener, occlusion through CollisionWorld::SegmentClear
 RenderSnapshot                  scene + camera (interpolated player eye) + frame index + view mode
+ui::Ui frame                    prompts, objective, cues, pause menu (settings applied at once), diagnostic panel
 Renderer::BeginFrame            wait for this slot's fence (2 frames in flight), reset allocator and upload arena,
                                 collect the GPU timings of the frame that last used the slot
 Renderer::RecordTrace           UAV barrier; SceneGpu::UpdateFrame writes instance, material, and emitter tables into the
@@ -43,6 +52,7 @@ Renderer::RecordTrace           UAV barrier; SceneGpu::UpdateFrame writes instan
                                              overlays on the display image only)
 Renderer::RecordCopyToBackBuffer [upscale to the presented size] display UAV->COPY_SOURCE, back buffer PRESENT->COPY_DEST,
                                 CopyResource, back
+Renderer::RecordOverlay         ui::Ui::Render into the back buffer (PRESENT->RENDER_TARGET->PRESENT); never in captures
 Renderer::EndFrame              resolve timestamps, close, ExecuteCommandLists, fence signal
 SwapChain::Present              vsync on/off; DXGI_ERROR_DEVICE_REMOVED triggers the DRED report and exit 1
 Scene::CommitRenderedFrame      previous transforms := the transforms just rendered (motion history refers to images)
@@ -102,6 +112,6 @@ that root and refused when they leave it.
 
 ## Not yet present
 
-DLSS reconstruction (deferred evaluation), audio (M5), the glTF/GLB subset (deferred), the
-objective and threat state machines with the catch and checkpoint restart (M5), the six-room level
-(M6). `docs/STATUS.md` names the next task.
+DLSS reconstruction (deferred evaluation), the glTF/GLB subset (deferred), the objective and
+threat state machines with the catch and checkpoint restart (M5), the six-room level (M6).
+`docs/STATUS.md` names the next task.

@@ -18,7 +18,7 @@ if(WIN32)
         environment_report.h
         main.cpp
     )
-    target_link_libraries(LastCircuit PRIVATE lc_app_options lc_ui lc_render lc_graphics lc_platform lc_game lc_scene lc_core lc_options advapi32)
+    target_link_libraries(LastCircuit PRIVATE lc_app_options lc_ui lc_audio lc_render lc_graphics lc_platform lc_game lc_scene lc_core lc_options advapi32)
     add_dependencies(LastCircuit lc_shaders)
     # Assets live beside the executable (the approved asset root; the M7 package keeps this layout).
     add_custom_command(TARGET LastCircuit POST_BUILD

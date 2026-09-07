@@ -90,6 +90,7 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     p.AddStringOption("log", "Append the log to this file.", "");
     p.AddFlag("play", "Live play (scene two_room): WASD move, mouse look, Shift sprint, E interact, F lamp, Escape releases the cursor.");
     p.AddFlag("no-ui", "Windowed runs: no prompts, pause menu (Escape), or diagnostic panel (F1); the benchmark never draws them.");
+    p.AddFlag("no-audio", "Windowed runs: open no audio device (sound events still produce their text cues).");
     p.AddStringOption("record", "With --play: write the per-tick input to this replay file on exit.", "");
     p.AddStringOption("replay", "Drive the simulation from this replay file (one tick per frame; deterministic).", "");
     p.AddIntOption("stop-at-tick", "With --replay: advance exactly this many ticks before rendering, then freeze (for reference mode and checks).", -1);
@@ -278,6 +279,7 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
 
     o.play = p.Has("play");
     o.noUi = p.Has("no-ui");
+    o.noAudio = p.Has("no-audio");
     if (const std::string s = p.GetString("record"); !s.empty()) o.record = std::filesystem::path(s);
     if (const std::string s = p.GetString("replay"); !s.empty()) o.replay = std::filesystem::path(s);
     o.stopAtTick = p.GetInt("stop-at-tick");

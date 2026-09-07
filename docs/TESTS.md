@@ -18,7 +18,7 @@ a supported GPU therefore reports the GPU tests as NOT RUN.
 Tolerances were chosen before the tests were run and are recorded here; they must not be widened
 to pass. When a scene was redesigned (T07, see below) the tolerance stayed and the scene changed.
 
-## CPU tests (`cpu_tests`, 82 cases in `tests/cpu`)
+## CPU tests (`cpu_tests`, 89 cases in `tests/cpu`)
 
 | File | Checks |
 |---|---|
@@ -42,6 +42,7 @@ to pass. When a scene was redesigned (T07, see below) the tolerance stayed and t
 | `test_benchmark.cpp` | Nearest-rank percentiles, median, counts above 33.3 / 50 ms; the report parses back as JSON with every required section |
 | `test_scene_file.cpp` | The golden `two_room.json` reproduces the proof level (material and instance counts, circuit states, door hinge, sockets, path, markers, the derived mirror aim within 1e-5, collider flags, deterministic reload hash); every validation rule rejects a patched document with a message naming the list, identifier, or field (schema, JSON syntax, duplicate id, unknown material, reflectance range, unknown circuit, box without centre, negative extent, opening leaving no wall, non-axis facing, unknown marker, objectives not implemented, zero speed); limits (object count, file size); asset-root containment (parent traversal and absolute paths refused, missing file reported) |
 | `test_collision.cpp` | Oriented boxes from the level's kit parts (the door leaf follows its angle); the capsule is pushed out of a wall it enters and slides along it; a centre on a face never crosses to the far side; the sphere sweep stops the carried lamp at a wall; a closing door that meets the player swings back open (`DoorBlocks` counts it); segment tests see through an open doorway and not through the closed leaf; the player cannot walk through the closed door or the walls in the replays (`t05`, `t06`) |
+| `test_audio.cpp` | Inverse-square attenuation clamped inside the reference distance and silent past the maximum; pan +1/-1/0 and the diagonal from the listener's right axis, turning the listener turns the pan; the occlusion factor scales the level and keeps the pan; every generated clip is non-empty, finite, under three seconds, peaks between 0.05 and 1, carries a `generated:` provenance, and is deterministic (the hum loop's ends meet, the room tone is exactly 2 s, the footstep variants differ); the director starts hums for lit fixtures only, stops one when its circuit goes off and starts one that comes on, moves the lamp's hum with its transform; door creak and thud on the state edges with the "creaks"/"shuts" cues, lamp click and handling, three footsteps over 2 m alternating variants and never occludable; the machine's loop runs only while it moves (a tick-less frame keeps it, a stop longer than the hold ends it), its cue respects the 6 m / 3 m occluded rule and the 5 s period; chime and sting; the system without a device keeps the cues and drops nothing |
 
 ## GPU tests (`tests/gpu/CMakeLists.txt`)
 
@@ -211,11 +212,19 @@ Approved image baselines are not yet stored; radiance is currently checked numer
   D3D12 messages. Captures through `--capture` never contain the interface (it is drawn into the
   back buffer after the copy).
 
+- Sound (M5, `artifacts/m5/ui/08_*`, `09_*`, `audio_check.log`): the same scripted run with the
+  panel open shows the device line (`4-5 voice(s) on '<output device>' at 48000 Hz, 0 dropped`:
+  the room tone, the three lit hums, the machine while it moves) and the log shows the cues in
+  the order of the events (door creak at the door's state change, the lamp click at the toggle,
+  the machine nearby); the cue text appears under the objective line. The lamp's sound position
+  is the fixture transform (spec §14, T13's sound part): `AudioSnapshotOf` reads the lamp pose
+  the renderer also uses. Hearing the output is NOT RUN by a person in this record.
+
 ## Not yet implemented
 
 T11 systematic offset sweeps (partly covered by the T03/T04 seals and the 400 m furnace floor),
 T14–T18 (T16's fixed 180-second full-encounter replay needs the M5/M6 content; the benchmark
-command exists); T13's sound part (the lamp's audio position). The §4 fourth sequence step (the
+command exists). The §4 fourth sequence step (the
 threat's shadow moving across a wall before direct contact) is staged in M5. T12 human
 confirmation at normal playback speed is recorded in STATUS.md as NOT RUN with a person; the
 automated lag metric and the frame sequences are the evidence.

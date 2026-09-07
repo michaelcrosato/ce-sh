@@ -131,7 +131,8 @@ LC_TEST(closing_door_swings_back_when_it_meets_the_player) {
     LC_REQUIRE(w.GetDoor().State() == lc::game::DoorState::Open);
     Run(w, Move(0.0f, 1.0f), 56);            // Into the doorway (x ~ 3.9; the open leaf lies along +X at z ~ 0.75).
     LC_CHECK(w.GetPlayer().Current().position.x > 3.85f);
-    Run(w, Look(0.0f, -0.12f), 10);          // Look down at the leaf's closed centre to interact with it.
+    LC_REQUIRE(w.CurrentInteraction().has_value());  // Looking level through the doorway still targets the leaf (eye-height aim point).
+    LC_CHECK_EQ(w.CurrentInteraction()->name, std::string("door"));
     Run(w, Interact(), 1);
     LC_CHECK(w.GetDoor().State() == lc::game::DoorState::Closing);
     Run(w, InputFrame{}, 70);                // A full swing would take 60 ticks; the leaf meets the player first.

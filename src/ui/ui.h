@@ -51,6 +51,7 @@ struct Diagnostics {
     std::string sceneFile;
     std::uint64_t sceneHash = 0;
     std::string lastReload;
+    std::string audio;
     std::vector<std::pair<std::string, double>> passes;  // GPU pass name -> milliseconds.
 };
 

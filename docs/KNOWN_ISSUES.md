@@ -129,6 +129,19 @@ and two hand boxes in `player_suit`, placed behind the eye axis (D-039). The han
 carried lamp and there are no arms or legs; the mirror therefore shows a floating torso with two
 hands and the lamp beside them. A proper body is M6/M7 content.
 
+## KI-024 — low — play mode — occlusion lowers the level without filtering
+
+A source behind a wall or the closed door plays at 0.3 of its level (D-041) with no low-pass
+filter, so it sounds quieter rather than muffled. The threat cue through a wall fires within
+3 m ("nearby" is true, the machine is a wall away), which is by design but may read as a spoiler
+at the start of the proof, where the machine begins 2.4 m from the player behind Room A's wall.
+
+## KI-025 — info — play mode — no fan in the proof, hands do not grip the lamp
+
+Spec §15 lists fan rotation among the first sounds; the two-room proof has no fan, so the fan clip
+(`FanLoop`) is generated and tested but unused until M6 places one. The hands stay at rest while
+the lamp is carried (KI-023).
+
 ## KI-012 — info — all builds — raw mode is noisy by design
 
 One path sample per pixel per frame with no temporal filtering (spec §13 raw mode). Real-time

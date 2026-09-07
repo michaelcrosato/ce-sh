@@ -314,7 +314,11 @@ std::optional<InteractionTarget> World::CurrentInteraction() const {
     auto pick = [&](std::optional<InteractionTarget> candidate) {
         if (candidate && (!best || candidate->alignment > best->alignment)) best = candidate;
     };
-    pick(consider("door", level_.door.centre, 2.0f));
+    // The leaf is tall: aim at it at eye height (within the leaf) so standing close and looking
+    // straight ahead still targets it.
+    Vec3 doorPoint = level_.door.centre;
+    doorPoint.y = std::clamp(eye.y, level_.door.centre.y - 0.8f, level_.door.centre.y + 0.8f);
+    pick(consider("door", doorPoint, 2.0f));
     if (lamp_.State() == LampState::Placed) {
         pick(consider("lamp", lamp_.Current().position + Vec3{0.0f, 0.1f, 0.0f}, Lamp::kReach));
     } else {

@@ -190,7 +190,7 @@ void Ui::DrawOverlay(const Overlay& overlay) {
     if (overlay.cueSeconds > 0.0f && !overlay.cue.empty()) {
         const float fade = std::clamp(overlay.cueSeconds / 0.5f, 0.0f, 1.0f);  // Fades over the last half second.
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, fade);
-        if (BeginPinned("##cue", ImVec2(size.x * 0.5f, 26.0f * s), ImVec2(0.5f, 0.0f), 0.5f)) {
+        if (BeginPinned("##cue", ImVec2(18.0f * s, 84.0f * s), ImVec2(0.0f, 0.0f), 0.5f)) {  // Under the objective, clear of the panel.
             ImGui::PushFont(nullptr, kBodyFontSize);
             ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.95f, 1.0f), "%s", overlay.cue.c_str());
             ImGui::PopFont();
@@ -288,6 +288,7 @@ void Ui::DrawDiagnostics(const Diagnostics& d) {
         ImGui::Separator();
         ImGui::Text("scene %s  hash %016llx", d.sceneFile.c_str(), static_cast<unsigned long long>(d.sceneHash));
         if (!d.lastReload.empty()) ImGui::Text("reload: %s", d.lastReload.c_str());
+        if (!d.audio.empty()) ImGui::Text("audio %s", d.audio.c_str());
     }
     ImGui::End();
 }

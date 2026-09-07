@@ -56,6 +56,7 @@ struct AppOptions {
     // Simulation (M3): live play, input recording, deterministic replay.
     bool play = false;                                  // Live input with the cursor captured (windowed).
     bool noUi = false;                                  // No on-screen interface (benchmarks; also implied by --benchmark-seconds).
+    bool noAudio = false;                               // No output device (windowed runs play sound by default).
     std::optional<std::filesystem::path> record;        // With --play: write the input replay.
     std::optional<std::filesystem::path> replay;        // Drive the simulation from a replay file.
     std::int64_t stopAtTick = -1;                       // With --replay: run exactly this many ticks, then freeze.

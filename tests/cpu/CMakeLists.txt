@@ -3,6 +3,7 @@ add_executable(lc_cpu_tests
     cpu_raycast.h
     lc_test.h
     lc_test_main.cpp
+    test_audio.cpp
     test_benchmark.cpp
     test_cli.cpp
     test_collision.cpp
@@ -27,7 +28,7 @@ target_include_directories(lc_cpu_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(lc_cpu_tests PRIVATE LC_REPLAY_DIR="${CMAKE_SOURCE_DIR}/tests/replay")
 # The scene loader in lc_scene reads LC_ASSET_ROOT when no override is set; the tests point it at the source tree.
 target_compile_definitions(lc_scene PRIVATE LC_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
-target_link_libraries(lc_cpu_tests PRIVATE lc_core lc_scene lc_game lc_app_options lc_render_contracts lc_options)
+target_link_libraries(lc_cpu_tests PRIVATE lc_core lc_scene lc_game lc_audio lc_app_options lc_render_contracts lc_options)
 
 add_test(NAME cpu_tests COMMAND lc_cpu_tests)
 set_tests_properties(cpu_tests PROPERTIES LABELS cpu)

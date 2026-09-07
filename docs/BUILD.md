@@ -94,6 +94,13 @@ swept back toward the player where it would enter a solid; a closing door that m
 swings back open. The placeholder body (torso and hands, `player_suit`) is placed so it stays out
 of the direct view except at steep pitches and appears in mirrors and shadows.
 
+Sound (windowed runs, `--no-audio` to open no device): fixture hums that follow the circuit and
+emitter state, the carried lamp's hum at the fixture transform, footsteps, the door's creak and
+thud, the lamp's click and handling, the machine's movement loop, and a room tone; positional
+level and stereo placement from the camera, a 0.3 level factor through walls and the closed door;
+master, effects, and ambience volumes and the text cues in the pause menu. Every clip is generated
+in code (`src/audio/clips.cpp` records the parameters); no audio file is loaded.
+
 Denoised mode (M4):
 
 ```powershell

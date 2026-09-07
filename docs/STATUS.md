@@ -12,19 +12,21 @@ Milestone:            M0 PASSED, M1 PASSED, M2 PASSED, M3 PASSED,
                       schema 1) with complete validation, limits, and asset-root containment; reload at a frame
                       boundary that never replaces a working scene with a broken one; content hashes in captures and
                       reports; the diagnostic panel is deferred to M5 (KI-017).
-                      M5 in progress (Tasks 1-3 of 6 PASSED): collision (capsule against the kit boxes, lamp
+                      M5 in progress (Tasks 1-4 of 6 PASSED): collision (capsule against the kit boxes, lamp
                       sweep, a door that never traps the player), the placeholder body visible in the mirror and
-                      clear of the camera by placement, and the interface (prompts, objective line, controls
-                      card, pause menu with settings, F1 diagnostic panel, reload from the menu) are built, tested,
-                      and image-checked; sound, threat states, the objective with catch and checkpoint restart,
-                      and the records with the human play-through follow the M5 plan.
+                      clear of the camera by placement, the interface (prompts, objective line, controls card,
+                      pause menu with settings, F1 diagnostic panel, reload from the menu), and sound (generated
+                      clips with provenance, attenuation, pan, occlusion, state-following hums and events, text
+                      cues, volumes) are built, tested, and checked; threat states, the objective with catch and
+                      checkpoint restart, and the records with the human play-through follow the M5 plan.
 Build or commit:      branch m0-m1-bootstrap; see git log for the exact commit.
                       Presets windows-debug and windows-release both configured, built, and tested (47 tests each).
 Environment:          Windows 11 Home 10.0.26200.9278 (25H2); Intel Core i7-14700F, 31.8 GiB RAM;
                       Visual Studio Community 2026 18.9.12120.119, MSVC 14.51.36231 (cl 19.51.36256);
                       CMake 4.3.1-msvc1 (VS-bundled); Windows SDK 10.0.26100.0; DXC 1.8.2502.11 + dxil.dll;
                       NRD v4.17.3, ShaderMake 18f5a344, MathLib v11, Dear ImGui v1.92.9b, miniaudio 0.11.25 as
-                      git submodules (docs/DEPENDENCIES.md); miniaudio is pinned but not yet compiled (Task 4).
+                      git submodules (docs/DEPENDENCIES.md); output device in the checks: the monitor's HDMI
+                      audio through NVIDIA High Definition Audio (WASAPI, 48 kHz).
 Implemented in this session:
                       M0/M1: CMake presets, build-time DXC, lc_core, lc_scene, Win32 window, D3D12 device/queue/swap
                       chain/resources/timestamps/BLAS/TLAS, diagnostics, layout probe, captures, resize test, docs.
@@ -54,10 +56,18 @@ Implemented in this session:
                       buffer after the present copy), the pause menu with live settings (sensitivity, inverted
                       look, field of view, exposure; volumes and text cues stored for the sound system), the
                       objective line, the controls card, the F1 panel, restart and reload from the menu, --no-ui.
-Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean (ImGui itself at /W3, no warnings); 6 shaders
-                      (cs_6_5, HLSL 2021, -WX -Zpr) plus NRD's 31 DXIL blobs through ShaderMake with the same DXC.
-                      CPU TESTED: lc_cpu_tests 82/82 PASSED (both presets): + scene-file golden load, rejection
-                      of every rule, limits and containment (3 cases); collision (6 cases).
+                      Sound: lc_miniaudio (WASAPI only, compiled from miniaudio.c) + lc_audio: 14 generated clips
+                      with provenance strings, audio::Director (hums per emitter state and transform, door creak
+                      and thud, lamp click and handling, footsteps per 0.62 m, the machine's loop while it moves,
+                      chime and sting, text cues), ComputeMix (inverse square clamped at 1 m, pan from the
+                      listener's right axis, occlusion 0.3 through the collision solids), AudioSystem (24 voices,
+                      effects/ambience groups, master and pause), --no-audio; the diagnostic panel shows the device
+                      and voices. Input record kept until a tick reads it (D-042, a dropped-press bug found here).
+Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean (ImGui and miniaudio at /W3, no warnings); 6
+                      shaders (cs_6_5, HLSL 2021, -WX -Zpr) plus NRD's 31 DXIL blobs through ShaderMake with the
+                      same DXC.
+                      CPU TESTED: lc_cpu_tests 89/89 PASSED (both presets): + scene-file golden load, rejection
+                      of every rule, limits and containment (3 cases); collision (6 cases); sound rules (7 cases).
                       GPU EXECUTED + PASSED (both presets), 46 GPU tests (ctest 47/47):
                         M5: t13 reflection (the mirror reports the torso after one bounce, the torso is not
                           directly visible, the reflected torso is lit); every M3/M4 replay now runs against the
@@ -82,6 +92,10 @@ Image evidence:       IMAGE CHECKED (artifacts/m4 and artifacts/m5/ui, regenerat
                       menu, menu with the F1 panel, play with the panel, "Close the door" after the door opened
                       with the threat in the doorway, the start pose after Restart from the menu); the pass table
                       shows the overlay at 0.01 ms; no D3D12 debug-layer messages during the run.
+                      M5 sound: two more captures with the panel's device line (4-5 voices on the HDMI output at
+                      48 kHz, 0 dropped) and the cue text under the objective; the log lists the cues at the
+                      events (creak at the door's state change, the click at the lamp toggle). Listening by a
+                      person: NOT RUN in this record.
                       t08_box denoised after 16 frames: smooth walls and soft contact shadows, no visible noise.
                       two_room tick 740 denoised (exposure 6): the dark inspection room with the mirror showing the
                       warm-lit hall and the threat silhouette, clean shading, no residual noise; the history overlay
@@ -97,7 +111,13 @@ Performance evidence: PERFORMANCE CHECKED, instrumentation and the §17 protocol
 Failed checks:        None outstanding. During M5: the first body placement (torso 5 cm in front of the eye) hid
                       the T06 floor patch a metre ahead and the door-open check fell from 0.0196 to 0.0048 (below
                       its 0.005 minimum); fixed by moving the body behind the eye axis (D-039), not the threshold.
-                      The mirror replay grazed the sink block once collision existed (the sink moved 20 cm).
+                      The mirror replay grazed the sink block once collision existed (the sink moved 20 cm). A
+                      posted F press did nothing in the sound check: the input record was cleared every frame and
+                      more than half the 144 Hz frames run no 60 Hz tick (D-042 fixes it). Standing at the door
+                      and looking level lost the prompt (the aim point was the leaf's centre at 1.0 m): the door
+                      is now aimed at eye height within the leaf; the closing-door CPU test was adjusted to look
+                      level instead of down. The machine's loop restarted every tick-less frame (a 0.25 s hold
+                      fixes it, tested).
                       During M4: the first denoised analytic run was 7-9 % dark (NRD's pre-accumulation blur and a
                       miss-dominated hit distance); fixed by switching the pre-pass off and mixing the light-sample
                       distance into the diffuse hit distance (D-034), not by widening the tolerance. A static-motion
@@ -115,10 +135,10 @@ Changed assumptions:  NRD's license is NVIDIA's proprietary RTX SDK license (att
                       recorded for the owner's review. The denoiser's spatial filter biases sharp lighting gradients
                       by a few percent (KI-018); the raw mean stays exact. Mirror planes are static for the PSR
                       motion (KI-020).
-Next concrete task:   M5 Task 4 of docs/superpowers/plans/2026-09-06-m5-playable-proof.md (miniaudio, generated
-                      clips, attenuation and occlusion, state-following, volumes, text cues), then Task 5 (threat
-                      states, objective, catch and checkpoint restart) and Task 6 (records; T14-T15 replays; the
-                      human play-through; performance re-measured with the M5 content).
+Next concrete task:   M5 Task 5 of docs/superpowers/plans/2026-09-06-m5-playable-proof.md (threat states with
+                      gameplay-data detection, the objective state machine, catch and checkpoint restart, T14
+                      invariance through a CPU-only state hash, T15 replays), then Task 6 (records; the human
+                      play-through; performance re-measured with the M5 content).
 ```
 
 ## Benchmark table (M4, two-room proof)

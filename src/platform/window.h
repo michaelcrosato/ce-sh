@@ -52,6 +52,8 @@ public:
     void EnableRawMouse();
     const RawInputState& Input() const { return input_; }
     void ClearInput();
+    // Returns the press edge of one key and clears it (frame-level commands such as F1 and R).
+    bool ConsumeKeyPressed(unsigned key);
 
     // Confines and hides the cursor while looking around. Focus loss releases it.
     void CaptureCursor(bool capture);

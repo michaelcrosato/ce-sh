@@ -109,6 +109,13 @@ void Window::ClearInput() {
     }
 }
 
+bool Window::ConsumeKeyPressed(unsigned key) {
+    key &= 0xFF;
+    const bool pressed = input_.keyPressed[key];
+    input_.keyPressed[key] = false;
+    return pressed;
+}
+
 void Window::ApplyCursorClip() {
     if (!cursorCaptured_ || minimized_) {
         ClipCursor(nullptr);

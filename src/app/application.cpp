@@ -3,6 +3,7 @@
 #include "app/benchmark.h"
 #include "app/environment_report.h"
 #include "app/temporal_checks.h"
+#include "audio/audio_system.h"
 #include "core/build_info.h"
 #include "core/clock.h"
 #include "core/error.h"
@@ -152,6 +153,61 @@ std::string PromptFor(game::World& world, const game::InteractionTarget& target)
     if (target.name == world.Level().shelfSocket.name) return "Place the lamp on the shelf";
     if (target.name == world.Level().floorSocket.name) return "Put the lamp down here";
     return "Use " + target.name;
+}
+
+// Every emitter instance is a sound source whose hum follows its emitter state and transform.
+struct AudioFixture {
+    InstanceId instance;
+    std::uint32_t material = 0;
+    std::string name;
+    audio::ClipId hum = audio::ClipId::FixtureHum;
+};
+
+std::vector<AudioFixture> CollectAudioFixtures(const Scene& scene, std::uint32_t lampMaterial) {
+    std::vector<AudioFixture> out;
+    for (const Instance& inst : scene.Instances()) {
+        const Material& m = scene.Materials()[inst.materialIndex];
+        if (m.type != MaterialType::Emitter) continue;
+        AudioFixture f;
+        f.instance = inst.id;
+        f.material = inst.materialIndex;
+        f.name = inst.name;
+        f.hum = inst.materialIndex == lampMaterial ? audio::ClipId::LampHum
+                : inst.name.find("emergency") != std::string::npos ? audio::ClipId::EmergencyHum
+                                                                     : audio::ClipId::FixtureHum;
+        out.push_back(f);
+    }
+    return out;
+}
+
+// The world as the sound rules see it (spec §15: actual world state, never display data).
+audio::WorldSnapshot AudioSnapshotOf(game::World& world, const std::vector<AudioFixture>& fixtures) {
+    audio::WorldSnapshot s;
+    s.playerFeet = world.GetPlayer().Current().position;
+    const game::Door& door = world.GetDoor();
+    s.doorMoving = door.IsMoving();
+    s.doorOpen = door.State() == game::DoorState::Open;
+    s.doorClosed = door.State() == game::DoorState::Closed;
+    s.doorPosition = world.Level().door.centre;
+    const game::Lamp& lamp = world.GetLamp();
+    s.lampOn = lamp.IsOn();
+    s.lampHeld = lamp.State() == game::LampState::Held;
+    s.lampPosition = lamp.Current().position + math::Vec3{0.0f, kLampBaseOffset + 0.05f, 0.0f};
+    s.threatPosition = world.GetThreat().Current().position;
+    const math::Vec3 eye = world.GetPlayer().EyePosition(world.GetPlayer().Current());
+    s.threatOccluded = !world.Colliders().SegmentClear(eye, s.threatPosition + math::Vec3{0.0f, 1.0f, 0.0f});
+    const Scene& scene = world.GetScene();
+    for (const AudioFixture& f : fixtures) {
+        const Instance* inst = scene.FindInstance(f.instance);
+        if (inst == nullptr) continue;
+        audio::FixtureSnapshot fs;
+        fs.name = f.name;
+        fs.position = inst->objectToWorld.TransformPoint({0.0f, 0.0f, 0.0f});
+        fs.on = scene.Materials()[f.material].emitterOn;
+        fs.hum = f.hum;
+        s.fixtures.push_back(fs);
+    }
+    return s;
 }
 
 // Stand-in objective line until the objective state machine (M5 Task 5) drives it.
@@ -395,6 +451,16 @@ int Application::RunRender() {
         bool menuReload = false;
         std::string lastReloadText;
         double lastCpuMs = 0.0;
+        // Sound (spec §15): generated clips through miniaudio in windowed runs; the rules (attenuation,
+        // pan, occlusion through the collision solids, state-following) live in audio::Director.
+        std::unique_ptr<audio::AudioSystem> audio;
+        audio::Director audioDirector;
+        std::vector<AudioFixture> audioFixtures;
+        if (window && world && !options_.noAudio) {
+            audio = std::make_unique<audio::AudioSystem>(true);
+            audioFixtures = CollectAudioFixtures(*scenePtr, world->Level().lampMaterial);
+            log::Info("audio: {} emitter fixture(s) with hums", audioFixtures.size());
+        }
 
         const std::uint32_t initialWidth = window ? window->ClientWidth() : options_.width;
         const std::uint32_t initialHeight = window ? window->ClientHeight() : options_.height;
@@ -587,12 +653,15 @@ int Application::RunRender() {
                 }
             }
 
-            // Key edges sampled once per frame, before the ticks consume the input record.
-            const bool diagnosticsKey = window && window->Input().keyPressed[VK_F1];
-            const bool reloadKey = window && options_.play && window->Input().keyPressed['R'];
+            // Frame-level key commands consume their own edges; the game keys and mouse deltas stay in
+            // the input record until a simulation tick reads them (frames outnumber ticks at high
+            // refresh rates, so clearing per frame would drop presses and mouse motion).
+            const bool diagnosticsKey = window && window->ConsumeKeyPressed(VK_F1);
+            const bool reloadKey = window && options_.play && window->ConsumeKeyPressed('R');
             if (diagnosticsKey && ui) {
                 showDiagnostics = !showDiagnostics;
             }
+            bool clearInput = window != nullptr;
 
             // Simulation (spec §9 order: input, fixed-step ticks, interpolated render data).
             float alpha = 1.0f;
@@ -610,6 +679,7 @@ int Application::RunRender() {
                             if (options_.record) recording.Record(tick, input);
                         });
                         alpha = step.alpha;
+                        clearInput = step.ticksRun > 0;  // Otherwise the record accumulates for the next tick.
                         if (step.clamped) log::Warn("simulation clamped a long frame ({:.3f} s)", realSeconds);
                     } else {
                         (void)simulation.Advance(0.0, [](std::uint64_t, float) {});  // Paused: no ticks, no catch-up.
@@ -624,12 +694,15 @@ int Application::RunRender() {
                     const bool lampNear = world->GetLamp().State() == game::LampState::Held || targetName == "lamp";
                     overlay.hint = lampNear ? (world->GetLamp().IsOn() ? "Switch the lamp off" : "Switch the lamp on") : std::string();
                     overlay.objectiveLine = ObjectiveFor(*world);
-                    overlay.cueSeconds = std::max(0.0f, overlay.cueSeconds - static_cast<float>(realSeconds));
                 } else if (!frozenReplay) {
                     if (benchmark && simulation.Tick() > replay->LastTick()) {
                         world->Reset();  // Back to the start: a camera cut, so the temporal history is invalid.
                         renderer.ResetHistory();
                         simulation = game::Simulation(tickRate);
+                        if (audio) {
+                            audio->StopAll();
+                            audioDirector.Reset();
+                        }
                         ++replayLoops;
                         log::Info("benchmark: replay loop {} restarts at frame {}", replayLoops, frameIndex);
                     }
@@ -640,8 +713,29 @@ int Application::RunRender() {
                 if (worldChanged) ++motionFrames;
                 camera = world->CameraAt(alpha);
                 camera.horizontalFovRadians = math::DegreesToRadians(ui ? uiSettings.horizontalFovDegrees : options_.horizontalFovDegrees);
+                if (audio) {
+                    // Sound follows the world state written above; the listener is the camera; occlusion
+                    // asks the collision solids (the door leaf included) between the eye and the source.
+                    const float audioDt = !options_.play ? 1.0f / static_cast<float>(tickRate) : static_cast<float>(realSeconds);
+                    const std::vector<audio::Command> commands = audioDirector.Update(AudioSnapshotOf(*world, audioFixtures), audioDt);
+                    audio::Listener listener;
+                    listener.position = camera.position;
+                    listener.forward = camera.Forward();
+                    listener.right = camera.ViewToWorld().TransformDirection({1.0f, 0.0f, 0.0f});
+                    audio->SetVolumes({uiSettings.masterVolume, uiSettings.effectsVolume, uiSettings.ambienceVolume});
+                    audio->SetPaused(paused);
+                    audio->Update(listener, commands, [&](math::Vec3 a, math::Vec3 b) { return !world->Colliders().SegmentClear(a, b); });
+                    for (const std::string& cue : audio->TakeCues()) {
+                        log::Debug("cue: {}", cue);
+                        if (uiSettings.textCues) {
+                            overlay.cue = cue;
+                            overlay.cueSeconds = 2.5f;
+                        }
+                    }
+                    overlay.cueSeconds = std::max(0.0f, overlay.cueSeconds - audioDt);
+                }
             }
-            if (window) window->ClearInput();
+            if (clearInput) window->ClearInput();
 
             // Interface for this frame: prompts and cues while playing, the pause menu, the diagnostic
             // panel. Settings from the menu apply immediately (sensitivity, look inversion, field of
@@ -673,6 +767,13 @@ int Application::RunRender() {
                     d.sceneFile = levelFile.string();
                     d.sceneHash = sceneContentHash != 0 ? sceneContentHash : scenePtr->ContentHash();
                     d.lastReload = lastReloadText;
+                    if (audio) {
+                        const audio::AudioStats& st = audio->Stats();
+                        d.audio = st.deviceReady ? std::format("{} voice(s) on '{}' at {} Hz, {} dropped", st.activeVoices, st.deviceName, st.sampleRate, st.droppedOneShots)
+                                                 : "no output device (cues only)";
+                    } else {
+                        d.audio = "off";
+                    }
                     ui->DrawDiagnostics(d);
                 }
                 if (uiSettings.exposure != integrator.exposure) {
@@ -693,6 +794,10 @@ int Application::RunRender() {
                 world->Reset();  // A camera cut: the temporal history is invalid.
                 renderer.ResetHistory();
                 simulation = game::Simulation(tickRate);
+                if (audio) {
+                    audio->StopAll();
+                    audioDirector.Reset();
+                }
                 log::Info("restart from the menu at frame {}", frameIndex);
             }
             menuReload = menuAction == ui::MenuAction::Reload;
@@ -710,6 +815,11 @@ int Application::RunRender() {
                     renderer.SetScene(*scenePtr);
                     renderer.ResetHistory();
                     simulation = game::Simulation(tickRate);
+                    if (audio) {
+                        audio->StopAll();
+                        audioDirector.Reset();
+                        audioFixtures = CollectAudioFixtures(*scenePtr, world->Level().lampMaterial);
+                    }
                     ++reloadCount;
                     lastReloadText = std::format("ok at frame {} (reload {})", frameIndex, reloadCount);
                     log::Info("scene reloaded ({}): world reset, history reset, frame {}", reloadCount, frameIndex);

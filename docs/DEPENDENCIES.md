@@ -13,7 +13,7 @@ option of the submodules is switched off in `cmake/LcNrd.cmake`).
 | ShaderMake | commit `18f5a344e7ca8fa65daaf079d07bc8ce38453e05` (the commit NRD 4.17.3 pins) | `git submodule` of https://github.com/NVIDIA-RTX/ShaderMake | MIT (`external/ShaderMake/LICENSE.txt`); bundles argparse (MIT, `ThirdPartyLicenses.txt`) | Build-time tool that compiles NRD's shaders with our DXC, and the `ShaderMakeBlob` reader NRD links | Build tool only; nothing shipped |
 | MathLib | tag v11 | `git submodule` of https://github.com/NVIDIA-RTX/MathLib | MIT (`external/MathLib/LICENSE.txt`) | Header-only math used by NRD's sources and shaders | Compiled into NRD; MIT notice to be included with the package |
 | Dear ImGui | v1.92.9b (commit `f1cc2ae15e53a861a874c3034aae6798fde194ab`) | `git submodule` of https://github.com/ocornut/imgui | MIT (`external/imgui/LICENSE.txt`) | On-screen prompts, pause menu, settings, and the diagnostic panel (spec §3 "Dear ImGui, or a similarly small approved library", §16); the Win32 and D3D12 backends from `backends/` render into the swap-chain image after the present copy | Compiled into the executable; MIT notice to be included with the package |
-| miniaudio | 0.11.25 (commit `9634bedb5b5a2ca38c1ee7108a9358a4e233f14d`) | `git submodule` of https://github.com/mackron/miniaudio | Public domain (Unlicense) or MIT No Attribution, at the user's choice (`external/miniaudio/LICENSE`) | Audio device output and mixing (spec §3 "One small library, such as miniaudio"); clips are generated in code (provenance: this repository) | Compiled into the executable; no notice required (MIT-0 chosen) |
+| miniaudio | 0.11.25 (commit `9634bedb5b5a2ca38c1ee7108a9358a4e233f14d`) | `git submodule` of https://github.com/mackron/miniaudio | Public domain (Unlicense) or MIT No Attribution, at the user's choice (`external/miniaudio/LICENSE`) | Audio device output (spec §3 "One small library, such as miniaudio"): compiled from its own `miniaudio.c` as `lc_miniaudio` with the WASAPI backend only and no decoding, encoding, generators, or resource manager; the mixing rules are ours (`src/audio/director.*`) and every clip is generated in code (`src/audio/clips.cpp`, provenance strings in the clips) | Compiled into the executable; no notice required (MIT-0 chosen) |
 
 Owner review: the NRD license is a proprietary NVIDIA SDK license, not an open-source license.
 Its terms were read in full during M4 (`external/NRD/LICENSE.txt`); the points that affect the
@@ -45,9 +45,9 @@ Header-only in-house code replaces what might otherwise be dependencies: PNG and
 | Candidate | Spec section | When |
 |---|---|---|
 | NVIDIA Streamline (DLSS Super Resolution) | §13 | After the native denoised path is stable (M4 evaluation deferred; see STATUS.md) |
-| Dear ImGui (diagnostic panel) | §3, §16 | With the scene-file reload command (M3.5) |
-| miniaudio | §15 | M5 |
 | Microsoft D3D12 Agility SDK | §3 | Only if a feature beyond the in-box runtime is needed |
+
+Dear ImGui and miniaudio moved from this table into the dependency table above in M5.
 
 Each addition must pin a tag or commit, record its license text, and be added to this file
 before it is used.
