@@ -107,6 +107,19 @@ float3 OffsetRay(float3 p, float3 n) {
                   abs(p.z) < origin ? p.z + floatScale * n.z : pI.z);
 }
 
+// The RTG offset bounds the error of the *point*; the hit position and the hardware intersection
+// also carry error proportional to the *triangle's* coordinate magnitude (a point near the origin
+// on a 400 m triangle sits inside the intersection's error band). Add the same 256-ULP bound for
+// the largest vertex coordinate of the triangle that was hit.
+float3 OffsetRayTri(float3 p, float3 n, float triangleScale) {
+    return OffsetRay(p, n) + n * (triangleScale * 3.0517578e-5);  // 256 * 2^-23
+}
+
+float TriangleScale(float3 p0, float3 p1, float3 p2) {
+    const float3 m = max(max(abs(p0), abs(p1)), abs(p2));
+    return max(m.x, max(m.y, m.z));
+}
+
 float LinearToSrgbChannel(float c) {
     return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
 }

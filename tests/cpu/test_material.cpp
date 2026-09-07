@@ -41,6 +41,17 @@ LC_TEST(material_validation_ranges) {
     mirror.type = lc::MaterialType::Mirror;
     mirror.reflectance = {1, 1, 1};
     LC_CHECK(lc::ValidateMaterial(mirror).empty());
+
+    lc::Material conductor;
+    conductor.type = lc::MaterialType::RoughConductor;
+    conductor.reflectance = {0.9f, 0.7f, 0.5f};
+    conductor.roughness = 0.3f;
+    LC_CHECK(lc::ValidateMaterial(conductor).empty());
+    conductor.roughness = 0.0f;
+    LC_CHECK(!lc::ValidateMaterial(conductor).empty());
+    conductor.roughness = 1.5f;
+    LC_CHECK(!lc::ValidateMaterial(conductor).empty());
+    LC_CHECK_EQ(std::string(lc::MaterialTypeName(lc::MaterialType::RoughConductor)), std::string("rough_conductor"));
 }
 
 LC_TEST(material_luminance_weights) {

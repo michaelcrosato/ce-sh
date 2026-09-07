@@ -65,9 +65,21 @@ Explicit types, validated at `Scene::AddMaterial`:
 | `Diffuse` | `reflectance` in [0, 1] per channel | Lambertian, `f = reflectance / pi`, two-sided (the shading normal is the geometric normal flipped toward the incoming ray) |
 | `Mirror` | `reflectance` in [0, 1] per channel (1 allowed for test mirrors) | Ideal specular reflection; delta event, no next-event estimation at this vertex |
 | `Emitter` | `radiance` >= 0 per channel, `reflectance` in [0, 1], `emitterOn` | Emits `radiance` from the front (winding) side only; the surface reflects diffusely with `reflectance` (so an off source, or its back, stays in the scene) |
+| `RoughConductor` | `reflectance` = F0 in [0, 1] per channel, `roughness` in [0.02, 1] (perceptual; GGX `alpha = roughness^2`) | Single-scattering microfacet conductor: Trowbridge-Reitz (GGX) NDF, height-correlated Smith masking-shadowing, Schlick Fresnel `F = F0 + (1 - F0)(1 - v.h)^5`; `f = D G2 F / (4 (n.v)(n.l))` |
 
 No normal maps; the geometric normal is used everywhere. No energy gain is possible: reflectance
-is bounded by 1 and the BSDF sampling weight equals the reflectance.
+is bounded by 1, the Lambertian sampling weight equals the reflectance, and the conductor weight
+`F * G2 / G1(v)` is at most 1.
+
+**Conductor sampling.** Visible-normal sampling (Heitz, "Sampling the GGX Distribution of Visible
+Normals", 2018) in the local frame of the shading normal: draw a microfacet normal `h` from
+`D_v(h) = G1(v) max(0, v.h) D(h) / (n.v)`, reflect `l = 2 (v.h) h - v`. The solid-angle density of
+`l` is `p_B(l) = G1(v) D(h) / (4 (n.v))` (used both for the continuation and for the MIS weight
+of light samples), and the sampling weight `f cos / p_B = F(v.h) G2(v, l) / G1(v)`. Samples that
+reflect below the surface are dropped: that is the well-known single-scattering energy loss of
+microfacet models, recorded as an approximation (no compensation term yet). Test T10 checks the
+loss against a CPU integration of the same BRDF and against the closed form `1 - ln 2` for
+`alpha = 1` at normal incidence.
 
 **Radiance convention:** scene-linear RGB, unitless. An emitter of radiance `L` that covers a
 receiver's whole hemisphere produces irradiance `pi * L`. No watts or lumens are claimed; the
@@ -141,10 +153,15 @@ toward the incoming ray; emission uses the unflipped normal so only the front em
   offset (scale 256) along the geometric normal for coordinates with `|p| >= 1/32`, a fixed
   `1/65536` float offset closer to the origin. The normal points toward the side the new ray
   travels on.
-- Shadow rays run from `OffsetRay(x, n)` to `OffsetRay(y, n_y)` with an unnormalized direction
-  `q - p` and the finite interval `[0, 1 - 1e-4]`, so neither endpoint's own surface is hit.
-- There is no per-asset bias. Tests T03 and T04 (zero radiance in sealed geometry with 0.15 m
-  walls, 0.04 m door, 0.005 m door inset) and the analytic tests pass with these offsets.
+- That bound covers the error of the *point*, not of the *triangle*: the interpolated hit position
+  and the hardware intersection carry error proportional to the largest vertex coordinate of the
+  triangle. `OffsetRayTri` therefore adds `256 * 2^-23 * max|vertex coordinate|` along the normal
+  (0.12 mm for a 4 m slab, 6 mm for the 400 m furnace floor). Without it, the T10 furnace on a
+  400 m floor lost 3.4 % of the energy to self-hits from below; with it every furnace case matches
+  the reference, and T03/T04 still show no leak through 0.15 m walls and the 5 mm door inset.
+- Shadow rays run from `OffsetRayTri(x, n)` to `OffsetRayTri(y, n_y)` with an unnormalized
+  direction `q - p` and the finite interval `[0, 1 - 1e-4]`, so neither endpoint's own surface is hit.
+- There is no per-asset bias.
 
 ## Sampling (spec §12)
 
@@ -214,11 +231,12 @@ of squares, u6 stats. Matrices in structured buffers are three explicit `float4`
 - Finite path length (4 hits in production) and one sample per pixel per frame in raw mode.
 - Hash-based sampling rather than a low-discrepancy sequence; convergence is `1/sqrt(N)`.
 - Float32 accumulation sums (adequate to a few thousand samples at these radiance levels).
-- Two-sided diffuse shading; emitter surfaces reflect diffusely; no rough conductor yet (§7's
-  `RoughConductor` is planned after the M2 gate); no participating media; no tone mapping.
+- Two-sided diffuse shading; emitter surfaces reflect diffusely; single-scattering conductors
+  (energy loss at high roughness, no multiple-scattering compensation); no participating media;
+  no tone mapping.
 
 ## Not implemented yet
 
-Rough conductor material; denoiser buffer contract and history policy (M4); motion vectors and
-previous-frame data (the records carry previous transforms but no pass consumes them); scene
-files (M3); tone mapping beyond clamping.
+Denoiser buffer contract and history policy (M4); motion vectors and previous-frame data (the
+records carry previous transforms but no pass consumes them); scene files (M3); tone mapping
+beyond clamping; multiple-scattering compensation for rough conductors.

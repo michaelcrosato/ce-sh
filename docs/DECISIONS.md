@@ -109,6 +109,17 @@ Format: date, issue, evidence, decision, consequence, rollback.
 - Evidence: the first T07 layout (red and white boxes) gave a redness ratio of 1.18 against a pre-chosen 1.2 factor.
 - Decision: keep the factor; make the scene physically stronger (a full red wall against a white wall, patches 0.15 m from each). Observed ratio afterwards clears the factor with margin.
 
+## D-021 (2026-09-06) Rough conductor: GGX with visible-normal sampling, single scattering
+
+- Decision: Trowbridge-Reitz NDF, height-correlated Smith G2, Schlick Fresnel with F0 = reflectance, perceptual roughness in [0.02, 1] with alpha = roughness^2, Heitz 2018 VNDF sampling; no multiple-scattering compensation (recorded loss).
+- Evidence: T10 furnace cases match the CPU-integrated directional albedo within 2 % at roughness 0.05/0.35/0.70 and the closed form 1 - ln 2 at alpha 1; MIS and BSDF-only estimators agree to four digits.
+
+## D-022 (2026-09-06) Ray offsets scale with the triangle's coordinate magnitude
+
+- Issue: the RTG offset bounds the point's error only; a point near the origin on a 400 m triangle self-hit from below and lost 3.4 % of the furnace energy.
+- Decision: `OffsetRayTri` adds 256 ULP of the largest vertex coordinate of the hit (or sampled) triangle along the normal. Sealed-room tests confirm no leaks with the larger offsets on 4 m slabs.
+- Rollback: none needed; a future per-triangle error bound from the intersection algorithm could replace the heuristic.
+
 ## D-013 (2026-09-06) Repository workflow for this session
 
 - Decision: work on branch `m0-m1-bootstrap` with small commits; nothing is pushed; `build/` and `artifacts/` are ignored. The owner decides on merging.

@@ -93,7 +93,7 @@ static_assert(sizeof(MeshRecord) == 16, "MeshRecord must match layouts.hlsli");
 struct MaterialRecord {
     std::uint32_t type = 0;
     std::uint32_t flags = 0;
-    float pad0 = 0.0f;
+    float roughness = 0.0f;
     float pad1 = 0.0f;
     float reflectance[3] = {};
     float pad2 = 0.0f;

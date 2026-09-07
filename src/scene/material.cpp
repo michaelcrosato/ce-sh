@@ -23,6 +23,7 @@ const char* MaterialTypeName(MaterialType type) {
         case MaterialType::Diffuse: return "diffuse";
         case MaterialType::Mirror: return "mirror";
         case MaterialType::Emitter: return "emitter";
+        case MaterialType::RoughConductor: return "rough_conductor";
     }
     return "unknown";
 }
@@ -44,6 +45,10 @@ std::vector<std::string> ValidateMaterial(const Material& m) {
     }
     if (m.type == MaterialType::Emitter && m.emitterOn && Luminance(m.radiance) <= 0.0f) {
         problems.push_back(std::format("material '{}' is an active emitter with zero radiance; turn it off or give it radiance", name));
+    }
+    if (m.type == MaterialType::RoughConductor &&
+        (!std::isfinite(m.roughness) || m.roughness < kMinRoughness || m.roughness > kMaxRoughness)) {
+        problems.push_back(std::format("material '{}' roughness {} must be within [{}, {}]", name, m.roughness, kMinRoughness, kMaxRoughness));
     }
     return problems;
 }

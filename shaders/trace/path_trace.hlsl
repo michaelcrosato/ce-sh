@@ -38,6 +38,7 @@ struct TriangleWorld {
     float3 p1;
     float3 p2;
     float3 geometricNormal;  // Unit, from the winding (unflipped).
+    float scale;             // Largest absolute vertex coordinate: error bound for offsets.
 };
 
 TriangleWorld LoadTriangle(uint instanceIndex, uint primitiveIndex) {
@@ -49,6 +50,7 @@ TriangleWorld LoadTriangle(uint instanceIndex, uint primitiveIndex) {
     t.p1 = TransformPoint(inst.objectToWorldRow, gPositions[mesh.firstVertex + gIndices[base + 1u]]);
     t.p2 = TransformPoint(inst.objectToWorldRow, gPositions[mesh.firstVertex + gIndices[base + 2u]]);
     t.geometricNormal = normalize(cross(t.p1 - t.p0, t.p2 - t.p0));
+    t.scale = TriangleScale(t.p0, t.p1, t.p2);
     return t;
 }
 
@@ -61,6 +63,7 @@ struct Surface {
     uint stableId;
     uint primitiveIndex;
     uint emitterIndex;
+    float scale;             // Triangle coordinate magnitude for ray offsets.
 };
 
 Surface ResolveSurface(ClosestHit hit, float3 rayDirection) {
@@ -77,6 +80,7 @@ Surface ResolveSurface(ClosestHit hit, float3 rayDirection) {
     s.stableId = inst.stableId;
     s.primitiveIndex = hit.primitiveIndex;
     s.emitterIndex = inst.emitterIndex;
+    s.scale = tri.scale;
     return s;
 }
 
@@ -88,6 +92,7 @@ struct LightSample {
     float3 normal;    // Emitting side.
     float3 radiance;
     float pdfArea;    // Probability density per unit area over all emitters: selectionPdf / area.
+    float scale;      // Emitting triangle coordinate magnitude for the shadow-ray endpoint offset.
     bool valid;
 };
 
@@ -118,6 +123,7 @@ LightSample SampleEmitters(float uSelect, float uTriangle, float2 uPoint) {
     ls.normal = tri.geometricNormal;
     ls.radiance = em.radiance;
     ls.pdfArea = em.selectionPdf / em.area;
+    ls.scale = tri.scale;
     ls.valid = em.area > 0.0 && em.selectionPdf > 0.0;
     return ls;
 }
@@ -134,9 +140,9 @@ float PowerHeuristic(float a, float b) {
 }
 
 // True when the finite segment between two offset surface points is unoccluded.
-bool Unoccluded(float3 from, float3 fromNormal, float3 to, float3 toNormal) {
-    const float3 origin = OffsetRay(from, fromNormal);
-    const float3 target = OffsetRay(to, toNormal);
+bool Unoccluded(float3 from, float3 fromNormal, float fromScale, float3 to, float3 toNormal, float toScale) {
+    const float3 origin = OffsetRayTri(from, fromNormal, fromScale);
+    const float3 target = OffsetRayTri(to, toNormal, toScale);
     const float3 segment = target - origin;
     return TraceVisibility(gScene, origin, segment, 0.0, 1.0 - 1e-4);
 }
@@ -230,7 +236,7 @@ PathResult TracePath(uint2 pixel, SampleKey key) {
                 break;
             }
             direction = reflect(direction, s.normal);
-            origin = OffsetRay(s.position, s.normal);
+            origin = OffsetRayTri(s.position, s.normal, s.scale);
             tMin = 0.0;
             throughput *= s.material.reflectance;
             previousDelta = true;
@@ -238,8 +244,8 @@ PathResult TracePath(uint2 pixel, SampleKey key) {
             continue;
         }
 
-        // Diffuse (or emitter surface as a reflector): next-event estimation.
-        const float3 brdf = DiffuseBrdf(s.material);
+        // Non-delta surface (diffuse, emitter surface, rough conductor): next-event estimation.
+        const float3 wo = -direction;
         if (strategy != LC_STRATEGY_BSDF && gIntegrator.emitterCount > 0u) {
             const LightSample ls = SampleEmitters(Rand(key, bounceDim + LC_DIM_EMITTER_SELECT),
                                                   Rand(key, bounceDim + LC_DIM_EMITTER_TRIANGLE),
@@ -255,13 +261,13 @@ PathResult TracePath(uint2 pixel, SampleKey key) {
                     const float pdfLight = ls.pdfArea * dist2 / cosLight;  // Solid-angle measure.
                     if (pdfLight <= 0.0) {
                         InterlockedAdd(gStats[LC_STATS_ZERO_PDF], 1u);
-                    } else if (Unoccluded(s.position, s.normal, ls.position, ls.normal)) {
+                    } else if (Unoccluded(s.position, s.normal, s.scale, ls.position, ls.normal, ls.scale)) {
+                        const float3 f = EvalBsdf(s.material, s.normal, wo, wi);
                         float weight = 1.0;
                         if (strategy == LC_STRATEGY_MIS && !lastVertex) {
-                            const float pdfBsdf = cosSurface / LC_PI;
-                            weight = PowerHeuristic(pdfLight, pdfBsdf);
+                            weight = PowerHeuristic(pdfLight, PdfBsdf(s.material, s.normal, wo, wi));
                         }
-                        radiance += throughput * brdf * ls.radiance * cosSurface / pdfLight * weight;
+                        radiance += throughput * f * ls.radiance * cosSurface / pdfLight * weight;
                     }
                 }
             }
@@ -271,22 +277,23 @@ PathResult TracePath(uint2 pixel, SampleKey key) {
             break;
         }
 
-        // Continue with a cosine-weighted BSDF sample: throughput *= brdf * cos / pdf = reflectance.
-        float pdfBsdf = 0.0;
-        const float3 next = CosineSampleHemisphere(Rand2(key, bounceDim + LC_DIM_BSDF), s.normal, pdfBsdf);
-        if (pdfBsdf <= 0.0) {
-            InterlockedAdd(gStats[LC_STATS_ZERO_PDF], 1u);
-            break;
+        // Continue with a BSDF sample: throughput *= f * cos / pdf.
+        const BsdfSample bs = SampleBsdf(s.material, s.normal, wo, Rand2(key, bounceDim + LC_DIM_BSDF));
+        if (!bs.valid) {
+            if (!IsRoughConductor(s.material)) {
+                InterlockedAdd(gStats[LC_STATS_ZERO_PDF], 1u);  // A diffuse sample can only fail through a zero pdf.
+            }
+            break;  // Conductor samples below the surface are energy loss by design (documented).
         }
-        throughput *= brdf * max(dot(s.normal, next), 0.0) / pdfBsdf;
+        throughput *= bs.weight;
         if (all(throughput <= 0.0)) {
             break;
         }
-        direction = next;
-        origin = OffsetRay(s.position, s.normal);
+        direction = bs.direction;
+        origin = OffsetRayTri(s.position, s.normal, s.scale);
         tMin = 0.0;
         previousDelta = false;
-        previousPdfBsdf = pdfBsdf;
+        previousPdfBsdf = bs.pdf;
     }
 
     if (!solidFound) {

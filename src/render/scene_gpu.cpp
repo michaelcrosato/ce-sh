@@ -137,6 +137,7 @@ void SceneGpu::UpdateFrame(const Scene& scene, gfx::UploadArena& arena, ID3D12Gr
             r = gpu::MaterialRecord{};
             r.type = static_cast<std::uint32_t>(m.type);
             r.flags = m.IsActiveEmitter() ? gpu::kMaterialFlagEmitterOn : 0u;
+            r.roughness = m.roughness;
             r.reflectance[0] = m.reflectance.x;
             r.reflectance[1] = m.reflectance.y;
             r.reflectance[2] = m.reflectance.z;

@@ -19,6 +19,11 @@ add_test(NAME gpu_t09_area_large COMMAND LastCircuit --scene t09_rect_light_larg
 add_test(NAME gpu_t07_indirect_colour COMMAND LastCircuit --scene t07_bleed --mode reference --spp 256 --validate --headless)
 add_test(NAME gpu_t08_box_positive COMMAND LastCircuit --scene t08_box --mode reference --spp 64 --validate --headless)
 add_test(NAME gpu_mirror_identity_and_energy COMMAND LastCircuit --scene mirror_box --mode reference --spp 64 --validate --headless)
+add_test(NAME gpu_t10_furnace_r05 COMMAND LastCircuit --scene t10_furnace_r05 --mode reference --spp 512 --validate --headless)
+add_test(NAME gpu_t10_furnace_r35 COMMAND LastCircuit --scene t10_furnace_r35 --mode reference --spp 512 --validate --headless)
+add_test(NAME gpu_t10_furnace_r70 COMMAND LastCircuit --scene t10_furnace_r70 --mode reference --spp 512 --validate --headless)
+add_test(NAME gpu_t10_furnace_closed_form COMMAND LastCircuit --scene t10_furnace_r100_normal --mode reference --spp 1024 --validate --headless --samples-per-frame 16)
+add_test(NAME gpu_metals_room_positive COMMAND LastCircuit --scene metals_room --mode reference --spp 64 --validate --headless)
 
 # Cross-run comparisons (patch means within max(relative tolerance, 3 standard errors)).
 # Same path family for every estimator: with N hits the NEE-based estimators (mis, light) also
@@ -39,6 +44,7 @@ set(_lc_gpu_tests
     gpu_list_adapters gpu_validate_rt_triangle gpu_validate_rt_boxes gpu_validate_rt_boxes_facing gpu_resize_test
     gpu_t03_no_sources gpu_t04_sealed_room gpu_t04_open_door gpu_t08_analytic_mis gpu_t08_analytic_light gpu_t08_analytic_bsdf
     gpu_t09_area_large gpu_t07_indirect_colour gpu_t08_box_positive gpu_mirror_identity_and_energy
+    gpu_t10_furnace_r05 gpu_t10_furnace_r35 gpu_t10_furnace_r70 gpu_t10_furnace_closed_form gpu_metals_room_positive
     gpu_t08_box_strategies_agree gpu_t07_agrees_with_higher_sample_reference gpu_t08_box_depth_truncation_report)
 set_tests_properties(${_lc_gpu_tests} PROPERTIES SKIP_RETURN_CODE 3 LABELS gpu TIMEOUT 900)
 set_tests_properties(gpu_resize_test PROPERTIES LABELS "gpu;window" RUN_SERIAL TRUE)

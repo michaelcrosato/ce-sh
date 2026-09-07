@@ -29,7 +29,8 @@ to pass. When a scene was redesigned (T07, see below) the tolerance stayed and t
 | `test_json.cpp` | Nesting, commas, escaping, empty containers, null |
 | `test_material.cpp` | Material ranges (no energy gain, no negative or non-finite values, only emitters emit, active emitters need radiance); luminance weights; default material; material index validation; emitter on/off revision |
 | `test_emitters.cpp` | Emitter areas follow instance transforms (uniform scale 2 gives area x4); per-emitter triangle CDF ends at 1; power-proportional selection (radiance 3:1 gives 0.75/0.25); off sources excluded; empty table |
-| `test_radiometry.cpp` | Closed-form rectangle irradiance vs 400x400 midpoint quadrature (1e-3 relative) at the centre and at arbitrary points inside, on the edge, and outside the footprint (2e-3); limit `pi * L` for a huge rectangle |
+| `test_radiometry.cpp` | Closed-form rectangle irradiance vs 400x400 midpoint quadrature (1e-3 relative) at the centre and at arbitrary points inside, on the edge, and outside the footprint (2e-3); limit `pi * L` for a huge rectangle; GGX directional albedo bounded by 1, monotonic in roughness, equal to `1 - ln 2` at alpha 1 / normal incidence within 0.2 %, stable under grid refinement (0.1 %) |
+| `test_material.cpp` (conductor part) | Roughness range [0.02, 1] enforced; type names |
 | `test_scene.cpp` | Box closed and outward; quad faces +Y; mesh validation; stable ids and transform history; every built-in hit expectation agrees with a CPU Möller–Trumbore ray cast that follows mirrors; every radiance patch is visible and unoccluded; projection inverts ray generation; `LookAt`; room slabs enclose the volume with solid corners and 0.15 m thickness; the closed door blocks 9 rays through the doorway and clears it when open; rectangle emitters face the requested axis |
 | `test_layouts.cpp` | `sizeof`/`offsetof` of every shared GPU record; view-mode names |
 
@@ -61,6 +62,9 @@ invalid-value counters (NaN, inf, negative, zero pdf) to be zero and zero debug-
 | `gpu_t07_indirect_colour` | `t07_bleed`, 256 spp: white room, red -X wall, white +X wall, ceiling panel, a crate | `R/(G+B)` of the floor patch 0.15 m from the red wall exceeds 1.2x the same ratio 0.15 m from the white wall; both patches lit |
 | `gpu_t08_box_positive` | `t08_box`, 64 spp: closed Cornell-style box | Floor, red wall, and back wall patches lit |
 | `gpu_mirror_identity_and_energy` | `mirror_box`, 64 spp: 4 x 7 m room, unit mirror on the -Z wall, orange box and a small wall lamp behind the camera | Mirror pixel that reflects the box reports the box's stable id as the first non-mirror hit; a neighbouring mirror pixel reports the +Z wall; the mirror centre's radiance equals the wall lamp's radiance (3.0) within 0.1 % (delta path, noise-free); the mirrored box is lit |
+| `gpu_t10_furnace_r05` / `_r35` / `_r70` | `t10_furnace_r*`, 512 spp: F0 = 1 conductor floor (400 m) under a 400 m uniform emitter of radiance 1, camera at 45 degrees; roughness 0.05, 0.35, 0.70 | Reflected radiance equals the single-scattering GGX directional albedo integrated on the CPU from the same formulas (`GgxDirectionalAlbedo`, checked against grid refinement to 0.1 %) within `max(2 %, 3 SE)`; no invalid values; energy never exceeds 1 |
+| `gpu_t10_furnace_closed_form` | `t10_furnace_r100_normal`, 1024 spp: roughness 1 at normal incidence | Radiance equals the closed form `1 - ln 2 = 0.3069` within 2 % (D = 1/pi, Lambda = (sec - 1)/2) |
+| `gpu_metals_room_positive` | `metals_room`, 64 spp: four steel boxes (roughness 0.05 to 0.8) and a copper slab under a ceiling panel | Copper patch lit; no invalid values (visual scene for inspection) |
 
 Cross-run comparisons via `tests/scripts/compare_runs.ps1` (patch means per channel within
 `max(relTol * |ref|, 3 * sqrt(se_a^2 + se_b^2))`):
@@ -97,7 +101,10 @@ Regenerate with `--capture` (see `docs/BUILD.md`) and inspect:
 
 Approved image baselines are not yet stored; radiance is currently checked numerically as above.
 
+- `metals_room`: sharp reflections of the panel in the smoothest steel box, progressively blurrier
+  in the rougher ones, a copper-tinted highlight on the slab, no fireflies.
+
 ## Not yet implemented
 
-T05/T06 motion (M3), T10 rough conductor (planned), T11 numerical-offset sweeps (partly covered by
-T03/T04 seals), T12–T18.
+T05/T06 motion (M3), T11 systematic offset sweeps (partly covered by the T03/T04 seals and the
+400 m furnace floor), T12–T18.

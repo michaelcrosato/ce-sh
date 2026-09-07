@@ -23,4 +23,10 @@ float RectangleIrradianceNumerical(float a, float b, float h, float radiance, in
 // Same for an arbitrary point (px, pz) under/beside the rectangle [x0, x1] x [z0, z1].
 float RectangleIrradianceNumericalAtPoint(float x0, float x1, float z0, float z1, float h, float radiance, float px, float pz, int n);
 
+// Directional albedo of the single-scattering GGX conductor BRDF used by the renderer (height-
+// correlated Smith masking, Fresnel = 1): E(theta_o) = integral over the hemisphere of
+// D * G2 / (4 cos_o) d(omega_i), integrated numerically. Under uniform illumination of radiance L
+// a conductor with F0 = 1 reflects exactly L * E(theta_o) (spec §19 T10 reference).
+float GgxDirectionalAlbedo(float cosThetaO, float alpha, int thetaSteps, int phiSteps);
+
 }  // namespace lc::math

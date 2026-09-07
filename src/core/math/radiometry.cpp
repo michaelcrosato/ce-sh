@@ -1,5 +1,6 @@
 #include "core/math/radiometry.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace lc::math {
@@ -50,6 +51,54 @@ float RectangleIrradianceNumericalAtPoint(float x0, float x1, float z0, float z1
 
 float RectangleIrradianceNumerical(float a, float b, float h, float radiance, int n) {
     return RectangleIrradianceNumericalAtPoint(-0.5f * a, 0.5f * a, -0.5f * b, 0.5f * b, h, radiance, 0.0f, 0.0f, n);
+}
+
+namespace {
+
+double GgxLambda(double alpha, double cosTheta) {
+    const double c2 = std::max(cosTheta * cosTheta, 1e-12);
+    const double tan2 = (1.0 - c2) / c2;
+    return (-1.0 + std::sqrt(1.0 + alpha * alpha * tan2)) * 0.5;
+}
+
+}  // namespace
+
+float GgxDirectionalAlbedo(float cosThetaO, float alpha, int uSteps, int phiSteps) {
+    // E(v) = integral over l of D(h) G2(v, l) / (4 n.v) dl. With dl = 4 (v.h) dh this becomes
+    // integral over h of [G2 (v.h) / ((n.v)(n.h))] * D(h)(n.h) dh, and D(h)(n.h) dh is exactly the
+    // uniform measure in (u, phi) under the GGX parameterization tan^2(theta_h) = a^2 u / (1 - u).
+    // A midpoint grid in (u, phi) therefore resolves the lobe at any roughness.
+    const double cosO = cosThetaO;
+    const double sinO = std::sqrt(std::max(0.0, 1.0 - cosO * cosO));
+    const double a = alpha;
+    const double a2 = a * a;
+    const double pi = 3.14159265358979323846;
+    const double lambdaO = GgxLambda(a, cosO);
+    double sum = 0.0;
+    for (int i = 0; i < uSteps; ++i) {
+        const double u = (i + 0.5) / uSteps;
+        const double cos2 = (1.0 - u) / (1.0 - u + a2 * u);
+        const double cosH = std::sqrt(cos2);
+        const double sinH = std::sqrt(std::max(0.0, 1.0 - cos2));
+        for (int j = 0; j < phiSteps; ++j) {
+            const double phi = 2.0 * pi * (j + 0.5) / phiSteps;
+            const double hx = sinH * std::cos(phi);
+            const double hy = sinH * std::sin(phi);
+            const double hz = cosH;
+            const double vDotH = hx * sinO + hz * cosO;
+            if (vDotH <= 0.0) continue;
+            // l = 2 (v.h) h - v
+            const double lx = 2.0 * vDotH * hx - sinO;
+            const double ly = 2.0 * vDotH * hy;
+            const double lz = 2.0 * vDotH * hz - cosO;
+            (void)ly;
+            if (lz <= 0.0) continue;  // Reflected below the horizon: single-scattering loss.
+            const double g2 = 1.0 / (1.0 + lambdaO + GgxLambda(a, lz));
+            sum += g2 * vDotH / (cosO * hz);
+            (void)lx;
+        }
+    }
+    return static_cast<float>(sum / (static_cast<double>(uSteps) * phiSteps));
 }
 
 }  // namespace lc::math

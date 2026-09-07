@@ -321,11 +321,70 @@ SceneDescription BuildMirrorBox() {
     return d;
 }
 
+std::uint32_t AddConductor(Scene& s, const char* name, Vec3 f0, float roughness) {
+    Material m;
+    m.name = name;
+    m.type = MaterialType::RoughConductor;
+    m.reflectance = f0;
+    m.roughness = roughness;
+    return s.AddMaterial(m);
+}
+
+// T10 furnace: a huge F0 = 1 conductor floor under a huge uniform emitter (radiance 1) facing down.
+// The reflected radiance at 45 degrees must equal the single-scattering GGX directional albedo,
+// which the CPU integrates numerically from the same formulas (energy loss recorded, never gain).
+SceneDescription BuildT10Furnace(float roughness, const char* name, bool normalIncidence) {
+    SceneDescription d;
+    d.name = name;
+    d.needsLighting = true;
+    const std::uint32_t metal = AddConductor(d.scene, "furnace_conductor", {1.0f, 1.0f, 1.0f}, roughness);
+    const MeshId floor = d.scene.AddMesh(MakeQuadXZ("floor", 200.0f, 200.0f));
+    d.scene.AddInstance("floor", floor, Mat4::Identity(), metal);
+    const std::uint32_t sky = AddEmitter(d.scene, "uniform_sky", {1.0f, 1.0f, 1.0f});
+    AddRectangleEmitter(d.scene, "uniform_sky", 400.0f, 400.0f, {0.0f, 2.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, sky);
+    d.camera.position = {0.0f, 1.0f, 0.0f};
+    const Vec3 target = normalIncidence ? Vec3{0.0f, 0.0f, 0.0f} : Vec3{0.0f, 0.0f, -1.0f};
+    d.camera.LookAt(target);  // Straight down, or 45 degrees onto the floor.
+    const float cosTheta = normalIncidence ? 1.0f : 0.70710678f;
+    const float alpha = roughness * roughness;
+    // alpha = 1 at normal incidence has the closed form 1 - ln 2 (D = 1/pi, Lambda = (sec - 1)/2).
+    const float albedo = (normalIncidence && roughness == 1.0f) ? (1.0f - 0.69314718f) : math::GgxDirectionalAlbedo(cosTheta, alpha, 1024, 1024);
+    d.radianceExpectations = {
+        Analytic("conductor under uniform radiance 1 reflects the GGX directional albedo (no energy gain)", target, albedo, 0.02f),
+    };
+    d.statsPatches = {{"floor_patch", target, 3}};
+    return d;
+}
+
+// Visual scene with conductors of several roughness values next to diffuse and mirror surfaces.
+SceneDescription BuildMetalsRoom() {
+    SceneDescription d;
+    d.name = "metals_room";
+    d.needsLighting = true;
+    const std::uint32_t grey = AddDiffuse(d.scene, "grey", {0.6f, 0.6f, 0.6f});
+    AddRoom(d.scene, "room", kStandardRoom, {grey, grey, grey});
+    const float roughness[4] = {0.05f, 0.2f, 0.45f, 0.8f};
+    for (int i = 0; i < 4; ++i) {
+        const std::uint32_t metal = AddConductor(d.scene, "steel", {0.56f, 0.57f, 0.58f}, roughness[i]);
+        AddBox(d.scene, "metal_box", {0.3f, 0.3f, 0.3f}, {-1.35f + 0.9f * static_cast<float>(i), 0.3f, -0.6f}, metal);
+    }
+    const std::uint32_t copper = AddConductor(d.scene, "copper", {0.95f, 0.64f, 0.54f}, 0.25f);
+    AddBox(d.scene, "copper_slab", {1.2f, 0.05f, 0.5f}, {0.0f, 0.05f, 0.3f}, copper);
+    const std::uint32_t lamp = AddEmitter(d.scene, "ceiling_panel", {10.0f, 10.0f, 10.0f});
+    AddRectangleEmitter(d.scene, "ceiling_panel", 0.8f, 0.8f, {0.0f, 2.79f, 0.2f}, {0.0f, -1.0f, 0.0f}, lamp);
+    d.camera.position = {0.0f, 1.7f, 1.9f};
+    d.camera.LookAt({0.0f, 0.3f, -0.4f});
+    d.radianceExpectations = {Positive("copper slab reflects the panel", {0.0f, 0.1f, 0.3f})};
+    d.statsPatches = {{"copper", {0.0f, 0.1f, 0.3f}, 3}};
+    return d;
+}
+
 }  // namespace
 
 std::vector<std::string> BuiltinSceneNames() {
     return {"rt_triangle", "rt_boxes", "t03_dark_room", "t04_sealed", "t04_open", "t07_bleed", "t08_box",
-            "t09_rect_light", "t09_rect_light_large", "mirror_box"};
+            "t09_rect_light", "t09_rect_light_large", "mirror_box", "t10_furnace_r05", "t10_furnace_r35",
+            "t10_furnace_r70", "t10_furnace_r100_normal", "metals_room"};
 }
 
 std::optional<SceneDescription> BuildBuiltinScene(std::string_view name) {
@@ -339,6 +398,11 @@ std::optional<SceneDescription> BuildBuiltinScene(std::string_view name) {
     if (name == "t09_rect_light") return BuildT09RectLight(false);
     if (name == "t09_rect_light_large") return BuildT09RectLight(true);
     if (name == "mirror_box") return BuildMirrorBox();
+    if (name == "t10_furnace_r05") return BuildT10Furnace(0.05f, "t10_furnace_r05", false);
+    if (name == "t10_furnace_r35") return BuildT10Furnace(0.35f, "t10_furnace_r35", false);
+    if (name == "t10_furnace_r70") return BuildT10Furnace(0.70f, "t10_furnace_r70", false);
+    if (name == "t10_furnace_r100_normal") return BuildT10Furnace(1.0f, "t10_furnace_r100_normal", true);
+    if (name == "metals_room") return BuildMetalsRoom();
     return std::nullopt;
 }
 

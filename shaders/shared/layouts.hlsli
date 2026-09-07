@@ -38,6 +38,7 @@ static const uint LC_INTEGRATOR_FLAG_JITTER = 2u;  // Jitter the camera ray insi
 static const uint LC_MATERIAL_DIFFUSE = 0;
 static const uint LC_MATERIAL_MIRROR = 1;
 static const uint LC_MATERIAL_EMITTER = 2;
+static const uint LC_MATERIAL_ROUGH_CONDUCTOR = 3;
 static const uint LC_MATERIAL_FLAG_EMITTER_ON = 1u;
 
 // Stats buffer slots (RWStructuredBuffer<uint>, LC_STATS_COUNT entries).
@@ -100,9 +101,9 @@ struct MeshRecord {
 struct MaterialRecord {
     uint type;          // LC_MATERIAL_*.
     uint flags;         // LC_MATERIAL_FLAG_*.
-    float pad0;
+    float roughness;    // RoughConductor: perceptual roughness in [0.02, 1]; GGX alpha = roughness^2.
     float pad1;
-    float3 reflectance; // Diffuse albedo, mirror reflectance, or the emitter surface albedo. [0, 1].
+    float3 reflectance; // Diffuse albedo, mirror reflectance, emitter surface albedo, or conductor F0. [0, 1].
     float pad2;
     float3 radiance;    // Emitter front-side radiance (scene-linear, unitless radiance scale).
     float pad3;

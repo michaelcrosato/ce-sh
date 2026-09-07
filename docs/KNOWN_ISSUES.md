@@ -59,6 +59,22 @@ The Win32 modal size/move loop blocks the frame loop until the drag ends; the la
 screen and the swap chain resizes on release. No corruption. Verification: a timer-driven render
 inside `WM_ENTERSIZEMOVE` if live resize is wanted.
 
+## KI-013 — info — all builds — rough conductors lose energy at high roughness
+
+Single-scattering GGX: the directional albedo at roughness 0.7 is about 0.69 at 45 degrees and
+0.31 at roughness 1 / normal incidence (T10 records the exact values). This is the documented
+behaviour of the model, not a leak; multiple-scattering compensation (Kulla-Conty style) can be
+added later and must keep T10's "no energy gain" bound.
+
+## KI-014 — medium — all builds — caustic fireflies from smooth conductors and mirrors
+
+Light that reaches a diffuse surface through a near-specular bounce (panel -> smooth steel ->
+wall) can only be found by BSDF sampling, so it appears as rare bright samples (visible as white
+speckles in `metals_room` at 512 spp). This is the known limitation of unidirectional path tracing
+with small bright sources; the estimator is unbiased. The spec allows evaluating a production
+outlier clamp later (off in reference mode, bias recorded); the denoiser (M4) is the other half of
+the answer. Verification: an M4 test comparing patch means with and without the clamp.
+
 ## KI-012 — info — all builds — raw mode is noisy by design
 
 One path sample per pixel per frame with no temporal filtering (spec §13 raw mode). Real-time
