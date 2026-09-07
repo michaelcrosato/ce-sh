@@ -146,6 +146,27 @@ Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean (ImGui and mini
                       2 goldens and rejections, the fan build, the fuse/fan/locked-door proof, pocket items and
                       their write rule, the fan loop, the six-room level (enclosure, door swings, budgets,
                       routing around the corner, the mirror through the CPU caster, sockets and markers).
+                      T17 (spec §19 reliability target) GPU EXECUTED + PERFORMANCE CHECKED + PASSED for the
+                      automated part (tests/scripts/reliability_m7.ps1, Release, artifacts/m7/reliability):
+                        The 30-minute loop: the caught replay (a catch and a checkpoint restart, the fuse's
+                          source change, seven doors, the mirror, the moving machine, the camera walk) looped
+                          137 times under the benchmark in a 1920x1080 window from 1280x720, denoised, vsync
+                          off, sound on: 971,041 frames in 1800 s, exit code 0, no error in the log, GPU
+                          average 1.83 / p95 2.06 / p99 2.25 / max 11.20 ms, CPU p95 2.09 ms, no frame above
+                          33.3 ms, 275 history resets. Memory sampled every minute: video memory 344.9 MiB and
+                          the denoiser pool 65.7 MiB constant for 30 minutes; the working set 295.5 -> 307.4
+                          MiB (peak 309.6), a rise of 0.4 MiB per minute that is the benchmark's own per-frame
+                          sample storage (two vectors of doubles, 971,041 entries each = 14.8 MiB, growing in
+                          steps) and not present outside a benchmark; the report's final working set 308 MB.
+                        The resize and focus sequence: the encounter replay looped for 300 s while the window
+                          was resized every five seconds through 1600x900, 800x600, 1920x1080, and 1280x720 (54
+                          resizes; the log records 54 swap-chain resizes) and minimised and restored every
+                          twenty seconds (13 cycles; focus lost and regained): exit code 0, no error, 156,196
+                          frames, 26 loops, GPU p95 3.84 / p99 4.19 / max 9.15 ms across the sizes, no frame
+                          above 33.3 ms; video memory follows the size (205 MiB at 1280x720 to 622 MiB at
+                          1920x1080, the denoiser pool 34 to 147 MiB) and returns to the same value for the
+                          same size (431.8 MiB at 121 s and at 301 s), working set 338-362 MiB (peak 371). The
+                          live-object report under a debugger stays NOT RUN (KI-004).
                       GPU EXECUTED + PASSED (both presets), 67 GPU tests + 4 CPU-only replay runs + the package
                       smoke test (ctest 73/73; Debug 186 s, Release 152 s, with the static CRT):
                         M7: package_smoke assembles the package of the configuration, checks the executable's
@@ -284,32 +305,33 @@ Failed checks:        None outstanding. During M7: the LNK4098 warning's source 
                       check point was off screen (moved to a pixel). The scaled resize test first judged the
                       internal size instead of the presented size.
 Checks not run and reasons:
-                      T11 offset sweeps; T17 (the 30-minute reliability loop, repeated resize and focus
-                      sequences beyond the resize tests, the live-object report under a debugger); T18 on a
-                      clean machine (none available: no second machine, virtual machine, or Windows Sandbox
-                      on Windows 11 Home; the import check and the package's smoke test from outside the
-                      build tree are the substitutes, KI-036). DLSS/Streamline: NOT RUN (deferred). History confidence inputs: not
-                      provided (KI-019). Second RTX device: only one GPU present. T12 review by a person at
-                      normal playback speed: NOT RUN (the automated lag metric, the frame sequences, and the
-                      overlays are the evidence). The menu's mouse path was driven by posted messages, not a
-                      person's hand. The M5 and M6 gate play-throughs by a person (spec §20): NOT RUN; listening
-                      to the sound: NOT RUN. Both need the owner or a tester at the keyboard with headphones;
-                      the commands are `LastCircuit.exe --scene two_room --play --mode denoised --exposure 4`
-                      and `LastCircuit.exe --scene six_room --play --mode denoised --exposure 4`. The demo's
-                      image checks are numerical identities and patch means at nine ticks; no reviewer has
-                      watched the encounter at playback speed.
+                      T11 offset sweeps; T17's live-object report under a debugger (KI-004); T18 on a clean
+                      machine (none available: no second machine, virtual machine, or Windows Sandbox on
+                      Windows 11 Home; the import check and the package's smoke test from outside the build
+                      tree are the substitutes, KI-036). DLSS/Streamline: NOT RUN (deferred). History
+                      confidence inputs: not provided (KI-019). Second RTX device: only one GPU present. T12
+                      review by a person at normal playback speed: NOT RUN (the automated lag metric, the
+                      frame sequences, and the overlays are the evidence). The menu's mouse path was driven
+                      by posted messages, not a person's hand. The M5 and M6 gate play-throughs by a person
+                      (spec §20): NOT RUN; listening to the sound: NOT RUN. Both need the owner or a tester at
+                      the keyboard with headphones; the commands are a double-click on the packaged
+                      executable (the demo), `LastCircuit.exe --scene mirror_lab --play --mode denoised` (the
+                      proof), and the package's smoke_test.cmd and benchmark.cmd. The demo's image checks are
+                      numerical identities and patch means at nine ticks; no reviewer has watched the
+                      encounter at playback speed. The usability check of spec §24 (three new players) is
+                      NOT RUN.
 Changed assumptions:  NRD's license is NVIDIA's proprietary RTX SDK license (attribution required; not open source):
                       recorded for the owner's review. The denoiser's spatial filter biases sharp lighting gradients
                       by a few percent (KI-018); the raw mean stays exact. Mirror planes are static for the PSR
                       motion (KI-020).
-Next concrete task:   T17 (spec §19 reliability target): the 30-minute loop of gameplay, restart, source
-                      switching, and camera motion (the caught replay under the benchmark loop) with the
-                      memory trend sampled through the run, and a separate sequence of repeated resize and
-                      focus changes; then the human items (the play-throughs of the proof and the demo,
-                      listening, the T12 review, a clean-machine run of the package) when a person and a
-                      second machine are available. Deferred engineering: the loading phase before the
-                      first frame (KI-022), the tone curve (KI-008, KI-016), the reusable-mesh budget
-                      (KI-029), DLSS through Streamline (KI-021), the glTF/GLB subset.
+Next concrete task:   The items that need a person or a second machine: the play-throughs of the proof and
+                      the demo, listening, the T12 review at playback speed, the §24 usability check with
+                      three new players, and a clean-machine run of the package (T18) with its smoke test
+                      and benchmark. Until then every milestone's automated evidence exists and the human
+                      gates are recorded NOT RUN. Deferred engineering, in the order the spec's optimisation
+                      rule suggests: the loading phase before the first frame (KI-022), the tone curve
+                      (KI-008, KI-016), the reusable-mesh budget (KI-029), the live-object report under a
+                      debugger (KI-004), DLSS through Streamline (KI-021), the glTF/GLB subset.
 ```
 
 ## Benchmark table (M4, two-room proof)

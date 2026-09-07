@@ -216,4 +216,6 @@ the third-party notices.
 
 `tools/capture_gameplay.ps1` writes the presented frames (interface included) of the encounter
 replay at twelve key ticks into `artifacts/m7/gameplay` (`--capture-backbuffer` takes a
-comma-separated list of frames).
+comma-separated list of frames). `tests/scripts/reliability_m7.ps1` runs the T17 sequence (the
+30-minute loop and the resize/focus sequence, docs/TESTS.md); every rendered run logs a memory line
+each minute.

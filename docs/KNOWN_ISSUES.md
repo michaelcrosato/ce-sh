@@ -240,7 +240,19 @@ virtual-key codes with the names beside them for reading.
 One path sample per pixel per frame with no temporal filtering (spec §13 raw mode). Real-time
 reconstruction is M4.
 
-## KI-007 — info — all builds — reliability loop not run
+## KI-007 — closed in M7 (T17) except device-removal recovery
 
-The 30-minute reliability loop, repeated reload/resize/focus sequences beyond the resize test, and
-device-removal recovery are NOT RUN. Device removal currently reports DRED data and exits with code 1.
+The 30-minute loop (the caught replay under the benchmark: 137 passes with a catch, a restart, the
+fuse's source change, doors, the mirror, and the camera walk) and the five-minute resize and focus
+sequence (54 resizes, 13 minimise/restore cycles) ran without an error (`docs/STATUS.md`,
+`tests/scripts/reliability_m7.ps1`). Video memory and the denoiser pool stayed constant for 30
+minutes; the working set's 0.4 MiB per minute rise is the benchmark's own sample storage. Device
+removal still reports DRED data and exits with code 1 (no recovery); repeated scene reloads over a
+long run were not part of the sequence (the reload test covers one reload).
+
+## KI-038 — info — benchmark — the sample storage grows with the run
+
+The benchmark keeps every measured frame's CPU and GPU time for the percentiles: two vectors of
+doubles, 16 bytes per frame, about 0.4 MiB per minute at 500 frames per second (14.8 MiB over the
+30-minute loop). This is the only memory growth seen in T17 and it does not exist outside a
+benchmark. Verification: none needed unless benchmarks run for hours; a histogram would bound it.

@@ -244,6 +244,20 @@ a bad level name (with the log's last error and the log path), the pause menu's 
 Controls (press-a-key rebinding of Interact to T, the conflict note, the reset), and About
 sections, the prompt showing `[T]`, and the same binding after a restart from the saved file.
 
+### T17: the reliability target (spec §19)
+
+`tests/scripts/reliability_m7.ps1` (Release, `artifacts/m7/reliability`): the 30-minute loop of
+the caught replay under the benchmark (a catch and a checkpoint restart, the fuse's source change,
+seven doors, the mirror, the moving machine, the camera walk; 1920x1080 from 1280x720, denoised,
+vsync off, sound on) and a separate five-minute sequence of the encounter replay while the script
+resizes the window every five seconds through four sizes and minimises and restores it every
+twenty seconds. Every rendered run logs a memory line each minute (working set and peak, video
+memory and budget, denoiser pool, history resets). Pass: exit code 0, no error in the log, memory
+without a trend that the run does not explain. Results on the recorded machine are in
+`docs/STATUS.md` (137 loops in 30 minutes and 54 resizes with 13 focus cycles, no error; the only
+working-set growth is the benchmark's sample storage, KI-038). The live-object report under a
+debugger and device-removal recovery remain NOT RUN (KI-004, KI-007).
+
 ### Mirror expectation derivation (`mirror_box`)
 
 Camera at (0, 1.2, 3.0) looking along -Z; mirror front face at z = -1.98 (4.98 m away). A ray that
@@ -308,8 +322,8 @@ Approved image baselines are not yet stored; radiance is currently checked numer
 
 ## Not yet implemented
 
-T11 systematic offset sweeps (partly covered by the T03/T04 seals and the 400 m furnace floor),
-T17 (the 30-minute reliability loop and the repeated resize/focus sequence), T18 (packaging, M7).
+T11 systematic offset sweeps (partly covered by the T03/T04 seals and the 400 m furnace floor);
+T17's live-object report and device-removal recovery; T18 on a clean machine (KI-036).
 The §4 fourth sequence step (the threat's shadow moving across a wall before direct contact) is
 not staged as a check: the fan's moving shadow and the machine seen in the mirror are the moving
 evidence in the demo. T12 human confirmation at normal playback speed and the M5/M6 play-through by
