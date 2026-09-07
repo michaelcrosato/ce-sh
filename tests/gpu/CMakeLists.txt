@@ -74,6 +74,9 @@ add_test(NAME gpu_t14_rules_exposure COMMAND LastCircuit --scene two_room --repl
 add_test(NAME gpu_t14_rules_internal_size COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_route.json" --mode denoised --internal 960x540 --frames 1481 --validate --headless --expect-state-hash ${LC_T15_ROUTE_HASH})
 add_test(NAME gpu_t15_catch_restart_denoised COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t15_catch_restart.json" --mode denoised --frames 1691 --validate --headless --expect-state-hash ${LC_T15_CATCH_HASH})
 set_tests_properties(sim_t15_route_cpu_only sim_t15_catch_restart_cpu_only PROPERTIES LABELS cpu)
+# M6: the six-room level's static check (the inspection mirror shows the machine parked in Hall A through
+# the open inspection door, lit by the hall fixture) and the scene file's own validation.
+add_test(NAME gpu_six_room_static_mirror COMMAND LastCircuit --scene six_room --mode reference --spp 32 --validate --headless)
 # Benchmark command (spec §21): a short headless run must produce a complete report.
 add_test(NAME gpu_benchmark_smoke COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_mirror_motion.json" --mode denoised
          --benchmark-seconds 2 --warmup-seconds 0.5 --report "${CMAKE_BINARY_DIR}/artifacts/benchmark_smoke.json" --headless)
@@ -104,6 +107,7 @@ set(_lc_gpu_tests
     gpu_denoised_motion_lamp gpu_denoised_motion_mirror_threat gpu_denoised_trail_lag gpu_denoised_resize_test gpu_denoised_scaled_resize_test
     gpu_benchmark_smoke gpu_scene_reload_test gpu_scene_file_option gpu_t13_player_in_reflection
     gpu_t14_rules_raw gpu_t14_rules_denoised gpu_t14_rules_exposure gpu_t14_rules_internal_size gpu_t15_catch_restart_denoised
+    gpu_six_room_static_mirror
     gpu_t08_box_strategies_agree gpu_t07_agrees_with_higher_sample_reference gpu_t08_box_depth_truncation_report)
 set_tests_properties(${_lc_gpu_tests} PROPERTIES SKIP_RETURN_CODE 3 LABELS gpu TIMEOUT 900)
 set_tests_properties(gpu_resize_test gpu_denoised_resize_test gpu_denoised_scaled_resize_test PROPERTIES LABELS "gpu;window" RUN_SERIAL TRUE)

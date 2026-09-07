@@ -22,6 +22,7 @@ add_executable(lc_cpu_tests
     test_scene.cpp
     test_scene_file.cpp
     test_simulation.cpp
+    test_six_room.cpp
     test_temporal_checks.cpp
     test_world.cpp
 )

@@ -283,29 +283,88 @@ float Threat::MoveToward(Vec3 target, float speed, float dt, const CollisionWorl
     return math::Length(target - current_.position);
 }
 
-float Threat::ClosestPathDistance() const {
-    float best = 0.0f;
+std::size_t Threat::ClosestSegment(Vec3 p, float& tOut, Vec3& closest) const {
+    std::size_t best = 0;
     float bestGap = 1e30f;
+    tOut = 0.0f;
+    closest = waypoints_.empty() ? p : waypoints_[0];
     for (std::size_t i = 0; i + 1 < waypoints_.size(); ++i) {
         const Vec3 a = waypoints_[i];
         const Vec3 b = waypoints_[i + 1];
         const Vec3 ab = b - a;
         const float len2 = math::Dot(ab, ab);
-        const float t = len2 > 0.0f ? std::clamp(math::Dot(current_.position - a, ab) / len2, 0.0f, 1.0f) : 0.0f;
-        const Vec3 p = a + ab * t;
-        const float gap = math::Length(p - current_.position);
+        const float t = len2 > 0.0f ? std::clamp(math::Dot(p - a, ab) / len2, 0.0f, 1.0f) : 0.0f;
+        const Vec3 q = a + ab * t;
+        const float gap = math::Length(q - p);
         if (gap < bestGap) {
             bestGap = gap;
-            best = cumulative_[i] + t * std::sqrt(len2);
+            best = i;
+            tOut = t;
+            closest = q;
         }
     }
     return best;
 }
 
+float Threat::ClosestPathDistance() const {
+    if (waypoints_.size() < 2) return 0.0f;
+    float t = 0.0f;
+    Vec3 closest;
+    const std::size_t i = ClosestSegment(current_.position, t, closest);
+    return cumulative_[i] + t * math::Length(waypoints_[i + 1] - waypoints_[i]);
+}
+
+std::vector<Vec3> Threat::PlanRoute(Vec3 from, Vec3 to, const CollisionWorld* colliders) const {
+    const Vec3 up{0.0f, 0.6f, 0.0f};  // Body height: door openings and the halls are clear there, walls are not.
+    if (colliders == nullptr || waypoints_.size() < 2 || colliders->SegmentClear(from + up, to + up)) {
+        return {to};
+    }
+    float ta = 0.0f, tb = 0.0f;
+    Vec3 pa, pb;
+    const std::size_t ia = ClosestSegment(from, ta, pa);
+    const std::size_t ib = ClosestSegment(to, tb, pb);
+    std::vector<Vec3> route;
+    auto add = [&](Vec3 p) {
+        if (route.empty() || math::Length(route.back() - p) > 0.2f) route.push_back(p);
+    };
+    add(pa);
+    if (ia < ib) {
+        for (std::size_t i = ia + 1; i <= ib; ++i) add(waypoints_[i]);
+    } else if (ia > ib) {
+        for (std::size_t i = ia; i > ib; --i) add(waypoints_[i]);
+    }
+    add(pb);
+    add(to);
+    return route;
+}
+
+float Threat::FollowRoute(float speed, float dt, const CollisionWorld* colliders) {
+    if (route_.empty()) return 0.0f;
+    if (routeIndex_ >= route_.size()) routeIndex_ = route_.size() - 1;
+    const float left = MoveToward(route_[routeIndex_], speed, dt, colliders);
+    const bool lastLeg = routeIndex_ + 1 == route_.size();
+    if (!lastLeg && (left < kArriveDistance || stuckSeconds_ > kStuckSeconds)) {
+        ++routeIndex_;  // The next leg (a blocked leg is skipped rather than pushed against forever).
+        stuckSeconds_ = 0.0f;
+    }
+    Vec3 toEnd = route_.back() - current_.position;
+    toEnd.y = 0.0f;
+    return math::Length(toEnd);
+}
+
+void Threat::Teleport(Vec3 position) {
+    current_.position = position;
+    previous_ = current_;
+}
+
+void Threat::BeginReturn() { Enter(ThreatState::Return); }
+
 void Threat::Enter(ThreatState state) {
     state_ = state;
     stateSeconds_ = 0.0f;
     stuckSeconds_ = 0.0f;
+    route_.clear();
+    routeIndex_ = 0;
     if (state == ThreatState::Return && !waypoints_.empty()) {
         const float d = ClosestPathDistance();
         returnTarget_ = PoseAtDistance(d).position;
@@ -342,24 +401,32 @@ void Threat::Tick(float dt, const ThreatSenses& senses, const CollisionWorld* co
             }
             break;
         case ThreatState::Investigate: {
-            const float left = MoveToward(lastSeen_, kInvestigateSpeed, dt, colliders);
-            if (left < kArriveDistance || stateSeconds_ > kInvestigateTimeout || stuckSeconds_ > kStuckSeconds) Enter(ThreatState::Wait);
+            if (route_.empty()) route_ = PlanRoute(current_.position, lastSeen_, colliders);
+            const float left = FollowRoute(kInvestigateSpeed, dt, colliders);
+            const bool onLastLeg = routeIndex_ + 1 >= route_.size();
+            if ((onLastLeg && left < kArriveDistance) || stateSeconds_ > kInvestigateTimeout || (onLastLeg && stuckSeconds_ > kStuckSeconds)) {
+                Enter(ThreatState::Wait);
+            }
             break;
         }
         case ThreatState::Wait:
             if (stateSeconds_ >= kWaitSeconds) Enter(ThreatState::Return);
             break;
         case ThreatState::Return: {
-            const float left = MoveToward(returnTarget_, kInvestigateSpeed, dt, colliders);
-            if (left < kArriveDistance) {
+            if (route_.empty()) route_ = PlanRoute(current_.position, returnTarget_, colliders);
+            const float left = FollowRoute(kInvestigateSpeed, dt, colliders);
+            const bool onLastLeg = routeIndex_ + 1 >= route_.size();
+            if (onLastLeg && left < kArriveDistance) {
                 distance_ = ClosestPathDistance();
                 current_ = PoseAtDistance(distance_);
                 state_ = ThreatState::Patrol;
                 stateSeconds_ = 0.0f;
-            } else if (stuckSeconds_ > kStuckSeconds && !waypoints_.empty()) {
-                // Blocked on the straight line: aim at the waypoints in turn instead.
+                route_.clear();
+            } else if (onLastLeg && stuckSeconds_ > kStuckSeconds && !waypoints_.empty()) {
+                // Still blocked at the end: aim at the waypoints in turn instead.
                 returnTarget_ = waypoints_[returnWaypoint_ % waypoints_.size()];
                 ++returnWaypoint_;
+                route_.clear();
                 stuckSeconds_ = 0.0f;
             }
             break;

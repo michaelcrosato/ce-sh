@@ -124,6 +124,7 @@ struct Document {
     std::vector<ItemSpec> items;
     std::string threatBody, threatHead, threatPath, threatParkAt;
     std::string mirrorObject, mirrorCheckCamera, mirrorAimAt, hallFloor;
+    std::string mirrorOpenDoor;  // Optional: the door the static mirror check looks through, opened in the static scene.
     // The objective: an ordered list of steps; the completion text once all are done.
     std::vector<StepSpec> steps;
     std::string objectiveComplete;
@@ -818,6 +819,11 @@ void ParseEntities(Reader& r, const json::Value& root, Document& doc) {
         if (r.ReadString(*mirror, "entities.mirror", "checkCamera", doc.mirrorCheckCamera, true)) requireMarker(doc.mirrorCheckCamera, "entities.mirror.checkCamera");
         if (r.ReadString(*mirror, "entities.mirror", "aimAt", doc.mirrorAimAt, true)) requireMarker(doc.mirrorAimAt, "entities.mirror.aimAt");
         if (r.ReadString(*mirror, "entities.mirror", "hallFloor", doc.hallFloor, true)) requireObject(doc.hallFloor, "entities.mirror.hallFloor", "slab", false);
+        if (r.ReadString(*mirror, "entities.mirror", "openDoor", doc.mirrorOpenDoor, false)) {
+            bool exists = false;
+            for (const DoorEntitySpec& d : doc.doors) exists = exists || d.id == doc.mirrorOpenDoor;
+            if (!exists) r.Error(std::format("entities.mirror.openDoor: door '{}' does not exist", doc.mirrorOpenDoor));
+        }
     }
     // Every box or quad without a static placement must be placed by an entity; static boxes need a centre.
     for (const ObjectSpec& o : doc.objects) {
@@ -1108,6 +1114,11 @@ TwoRoomLevel BuildLevel(const Document& doc, std::string_view sourceName, std::u
     }
     (void)aimAt;
     level.hallCheckPoint = level.threatCheckPosition;
+    // The static scene (the mirror identity check and captures) looks through this door: open it there.
+    // The world starts with every door closed regardless.
+    for (const LevelDoor& door : level.doors) {
+        if (!doc.mirrorOpenDoor.empty() && door.id == doc.mirrorOpenDoor) s.SetTransform(door.handle.id, DoorTransform(door.handle, 1.5708f));
+    }
 
     // The proof's singular fields mirror the first door and the lit item (the world's current code paths).
     if (!level.doors.empty()) level.door = level.doors.front().handle;

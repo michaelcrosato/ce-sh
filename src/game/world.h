@@ -190,6 +190,14 @@ public:
     void SetDistance(float distance);
     float Distance() const { return distance_; }
     float PathLength() const { return pathLength_; }
+    // Explicit staging (tests): an off-path position, and the start of a return to the path.
+    void Teleport(math::Vec3 position);
+    void BeginReturn();
+    // The route an off-path move follows (spec §15: hall waypoints, no navigation mesh): the straight
+    // line when the collision solids leave it clear at body height, otherwise the patrol polyline
+    // between the points closest to `from` and `to`, then `to`.
+    std::vector<math::Vec3> PlanRoute(math::Vec3 from, math::Vec3 to, const CollisionWorld* colliders) const;
+    const std::vector<math::Vec3>& CurrentRoute() const { return route_; }
 
 private:
     PoseSpec PoseAtDistance(float distance) const;
@@ -197,7 +205,10 @@ private:
     bool Detect(const ThreatSenses& senses) const;
     // Straight-line step toward a target, sliding along solids; returns the distance still to go.
     float MoveToward(math::Vec3 target, float speed, float dt, const CollisionWorld* colliders);
+    // Follows route_ leg by leg; returns the distance to its final point.
+    float FollowRoute(float speed, float dt, const CollisionWorld* colliders);
     float ClosestPathDistance() const;
+    std::size_t ClosestSegment(math::Vec3 p, float& t, math::Vec3& closest) const;
     void Enter(ThreatState state);
 
     std::vector<math::Vec3> waypoints_;
@@ -215,6 +226,8 @@ private:
     math::Vec3 lastSeen_;
     math::Vec3 returnTarget_;
     std::size_t returnWaypoint_ = 0;
+    std::vector<math::Vec3> route_;
+    std::size_t routeIndex_ = 0;
     bool seen_ = false;
     bool caught_ = false;
 };
