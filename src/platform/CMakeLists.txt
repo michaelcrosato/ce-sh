@@ -1,5 +1,7 @@
 # lc_platform: Win32 window, files, and error reporting. Windows only.
 add_library(lc_platform STATIC
+    dialogs.cpp
+    dialogs.h
     files.cpp
     files.h
     win_error.cpp

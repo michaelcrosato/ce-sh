@@ -108,6 +108,14 @@ set_tests_properties(sim_t16_encounter_cpu_only sim_t16_caught_cpu_only PROPERTI
 add_test(NAME gpu_benchmark_smoke COMMAND LastCircuit --scene two_room --replay "${_lc_replay}/t12_mirror_motion.json" --mode denoised
          --benchmark-seconds 2 --warmup-seconds 0.5 --report "${CMAKE_BINARY_DIR}/artifacts/benchmark_smoke.json" --headless)
 
+# M7 (T18's automated part): the packaging command assembles the package of this configuration's
+# build (no rebuild, no zip) into the build tree's artifacts, checks the executable's imports against
+# Windows' in-box libraries, and runs the package's own smoke test from the package directory.
+add_test(NAME package_smoke
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_SOURCE_DIR}/tools/package.ps1"
+            -Preset windows-$<LOWER_CASE:$<CONFIG>> -NoBuild -NoZip -SmokeTest -OutDir "${CMAKE_BINARY_DIR}/artifacts/package")
+set_tests_properties(package_smoke PROPERTIES SKIP_RETURN_CODE 3 LABELS "gpu;package" TIMEOUT 900)
+
 # Cross-run comparisons (patch means within max(relative tolerance, 3 standard errors)).
 # Same path family for every estimator: with N hits the NEE-based estimators (mis, light) also
 # capture direct light at the N-th surface, which BSDF-only can reach only as an (N+1)-th hit.

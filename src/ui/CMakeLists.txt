@@ -23,4 +23,4 @@ add_library(lc_ui STATIC
     ui.cpp
     ui.h
 )
-target_link_libraries(lc_ui PUBLIC lc_imgui lc_graphics lc_platform lc_core lc_options)
+target_link_libraries(lc_ui PUBLIC lc_imgui lc_graphics lc_platform lc_game lc_core lc_options)

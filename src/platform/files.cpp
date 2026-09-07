@@ -57,4 +57,18 @@ std::filesystem::path ExecutablePath() {
 
 std::filesystem::path ExecutableDirectory() { return ExecutablePath().parent_path(); }
 
+std::filesystem::path UserDataDirectory() {
+    std::filesystem::path base;
+    wchar_t buffer[MAX_PATH * 2] = {};
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, static_cast<DWORD>(std::size(buffer)));
+    if (length > 0 && length < std::size(buffer)) {
+        base = std::filesystem::path(std::wstring(buffer, length)) / "LastCircuit";
+    } else {
+        base = ExecutableDirectory() / "userdata";
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(base, ec);
+    return base;
+}
+
 }  // namespace lc::files

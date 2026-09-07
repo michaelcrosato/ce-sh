@@ -16,6 +16,7 @@ std::mutex g_mutex;
 std::ofstream g_file;
 std::atomic<Level> g_minLevel{Level::Info};
 std::atomic<std::size_t> g_errorCount{0};
+std::string g_lastError;  // Guarded by g_mutex.
 
 const char* LevelTag(Level level) {
     switch (level) {
@@ -61,6 +62,8 @@ Level MinLevel() { return g_minLevel.load(); }
 void Write(Level level, std::string_view message) {
     if (level == Level::Error) {
         g_errorCount.fetch_add(1);
+        std::lock_guard lock(g_mutex);
+        g_lastError.assign(message);
     }
     if (level < g_minLevel.load()) {
         return;
@@ -76,5 +79,10 @@ void Write(Level level, std::string_view message) {
 }
 
 std::size_t ErrorCount() { return g_errorCount.load(); }
+
+std::string LastError() {
+    std::lock_guard lock(g_mutex);
+    return g_lastError;
+}
 
 }  // namespace lc::log

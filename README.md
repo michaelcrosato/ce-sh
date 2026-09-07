@@ -28,7 +28,11 @@ from the same kit: six rooms and two halls, seven doors, the lamp and the fuse, 
 where the fuse sits (the halls go dark, the fan spins down, the exit powers up), a ceiling fan under
 a real fixture, the machine hunting through both halls, and two fixed replays (the encounter and a
 caught-and-restarted variant) checked on the CPU, under the renderer, and frozen at their image
-ticks. Details, evidence labels, and the next task: [`docs/STATUS.md`](docs/STATUS.md).
+ticks. The external test package (M7) is one executable with its shaders and assets (static
+runtime, no redistributable, offline): a double-click starts the demo, settings and key bindings
+persist, startup failures explain themselves in a message box, the notices travel with it, and a
+smoke test and a benchmark command sit beside it; `tools/package.ps1` builds it. Details, evidence
+labels, and the next task: [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Quick start
 
@@ -41,6 +45,8 @@ ctest --preset windows-debug --output-on-failure
 .\build\windows-debug\bin\LastCircuit.exe --scene two_room --play --exposure 4 # walk the two-room proof (WASD, mouse, E, F; Escape menu, F1 panel, R reload; sound on, --no-audio off)
 .\build\windows-debug\bin\LastCircuit.exe --scene two_room --play --mode denoised --exposure 4   # the same, reconstructed (NRD)
 .\build\windows-release\bin\LastCircuit.exe --scene six_room --play --mode denoised --exposure 4 # the six-room demo (M6): lamp, mirror, fan, fuse, dark return, exit
+.\build\windows-release\bin\LastCircuit.exe                                                      # no arguments: the demo in play, as a tester starts it (M7)
+.\tools\package.ps1                                                                              # the package in dist\ (executable, shaders, assets, notices, smoke test, benchmark)
 .\build\windows-debug\bin\LastCircuit.exe --scene t08_box --mode reference     # path-traced Cornell-style box
 .\build\windows-debug\bin\LastCircuit.exe --scene rt_boxes --mode diag         # M1 diagnostic normals view
 ```

@@ -5,6 +5,8 @@ add_library(lc_game STATIC
     input.h
     replay.cpp
     replay.h
+    settings.cpp
+    settings.h
     simulation.cpp
     simulation.h
     state_checks.cpp

@@ -23,7 +23,8 @@ to pass. When a scene was redesigned (T07, see below) the tolerance stayed and t
 | File | Checks |
 |---|---|
 | `test_log.cpp` | Error counting through level filtering; clock monotonic; timestamp shapes; `LC_THROW` message carries file and line; strong ids |
-| `test_cli.cpp` | Unknown/repeated/valueless options are errors; `--opt value` and `--opt=value`; integer and float validation; `AppOptions` mapping; view-name errors list valid names; conflicting flags |
+| `test_cli.cpp` | Unknown/repeated/valueless options are errors; `--opt value` and `--opt=value`; integer and float validation; `AppOptions` mapping; view-name errors list valid names; conflicting flags; M7: `--version`, the §21 scene names (`last_circuit`, `mirror_lab`) resolve to the level files, a launch without arguments is the demo in play, `--no-dialog`, `--settings` belongs to play |
+| `test_settings.cpp` | M7: the settings round trip through JSON and keep their defaults for missing members; every value stays inside its documented range (clamped from a struct and from a file, with the problems listed; a mistyped member and an unbindable key keep their defaults; unknown members are ignored; text that is not JSON is refused with the reason); a missing file is the defaults, a saved file loads back, a broken file is the defaults with one problem; key names, bindable keys (not Escape, F1, mouse buttons, the Windows key), conflicts; the input follows the bindings (the default keys do nothing once rebound), press edges and mouse deltas count only when consumed, inverted look flips the pitch |
 | `test_math.cpp` | Right-handed cross product; rotation directions; product order; translation column; direction transform ignores translation; inverse round trip with non-uniform scale; singular detection; transpose; `LookAtRh`; projection depth range and axis signs; FOV conversion; yaw/pitch basis; `Mat3x4` rows |
 | `test_image_write.cpp` | CRC-32 and Adler-32 known values; PNG signature, IHDR, chunk CRCs and order, stored-deflate payload decoded byte for byte, multi-block streams; PFM header and row order |
 | `test_json.cpp` | Nesting, commas, escaping, empty containers, null |
@@ -230,6 +231,18 @@ frame (D-051).
 Performance with this content (spec §17 protocol, `tests/scripts/bench_m6.ps1`: three 180-second
 Release runs of the encounter and one of the caught variant): the M6 benchmark table in
 `docs/STATUS.md`. The M6 gate's human items are recorded there.
+
+### M7: the package (spec §20 M7, §21, §19 T01/T18)
+
+| Test | Command (abridged) | Checks |
+|---|---|---|
+| `package_smoke` | `powershell -File tools/package.ps1 -Preset windows-<config> -NoBuild -NoZip -SmokeTest -OutDir <build>/artifacts/package` | The packaging command assembles the package of the current configuration (executable, shaders, assets, replays, generated notices, README, known issues, the two commands, the manifest), refuses an executable that imports anything outside Windows' in-box libraries (the PE import and delay-import tables), then runs the package's `smoke_test.cmd /quiet` from the package directory: adapters and the environment report, the T01 diagnostic validation of `rt_boxes`, 600 reconstructed frames of the encounter replay with the layout probe and the world-state checks inside that range, and a ten-second benchmark report; exit 3 (no supported adapter) is reported as skipped |
+
+The startup dialog, the console release, the settings file, the rebinding, and the persisted
+settings were checked in windowed runs driven by posted messages (`artifacts/m7`): the dialog for
+a bad level name (with the log's last error and the log path), the pause menu's Settings,
+Controls (press-a-key rebinding of Interact to T, the conflict note, the reset), and About
+sections, the prompt showing `[T]`, and the same binding after a restart from the saved file.
 
 ### Mirror expectation derivation (`mirror_box`)
 

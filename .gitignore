@@ -2,6 +2,7 @@
 build/
 out/
 artifacts/
+dist/
 
 # IDE and tool state
 .vs/

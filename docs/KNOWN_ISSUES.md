@@ -205,15 +205,35 @@ by GDI capture, not from the renderer or the interface. Evidence: `artifacts/m5/
 (`h_backbuffer/backbuffer_frame340.png` and `_alpha.png` fully opaque next to `h_printwindow.png`
 with holes). Use the in-app captures for image evidence; screenshots are for layout only.
 
-## KI-034 — low — both presets — the linker warns LNK4098 (LIBCMT) since M5
+## KI-034 — closed in M7 — the linker warned LNK4098 (LIBCMT) since M5
 
-Linking `LastCircuit.exe` and `lc_cpu_tests.exe` prints `LNK4098: defaultlib 'LIBCMT' conflicts
-with use of other libs` in Debug and Release since the sound task of M5 (the build logs of that
-task show it first; the compiler stays `/W4 /WX` clean). Some object in the link asks for the
-static release CRT while the presets use the dynamic CRT. Nothing misbehaves in the tests, but a
-mixed CRT is not acceptable for the M7 package. Verification: link once with `/VERBOSE:LIB` to name
-the object, then build that library with the presets' runtime or add the `/NODEFAULTLIB` the
-warning suggests, and record the choice with the packaging decision (BUILD.md "Packaging").
+`miniaudio.c` was compiled without CMake's runtime flags because the project enabled only C++, so
+MSBuild's default (the release static CRT) went into `lc_miniaudio.lib` in every configuration
+(found with `dumpbin /DIRECTIVES` over every library). C is now an enabled language and both
+presets link the static CRT (D-053); the warning is gone and every library agrees on the runtime.
+
+## KI-035 — info — package — a double-click launch flashes a console window
+
+The executable keeps the console subsystem (D-010, D-053); Windows creates a console for a
+double-click, which the program frees at once. The window is visible for a moment before the game
+window appears. A windowed subsystem with `AttachConsole` would remove the flash at the cost of
+the terminal behaviour the tests and scripts rely on. Verification: none needed; recorded for the
+tester.
+
+## KI-036 — medium — package — no clean-machine test (T18 NOT RUN)
+
+No clean machine, virtual machine, or Windows Sandbox was available in this session (Windows 11
+Home). The substitutes: the executable links the static CRT and imports only Windows' in-box
+libraries (checked by `tools/package.ps1` from the PE import tables), and the package's smoke test
+runs from a directory outside the build tree on the development machine (`package_smoke`). A
+second machine with an RTX adapter and no Visual Studio is needed to mark T18 PASSED.
+
+## KI-037 — info — play — rebinding limits
+
+Only keyboard keys can be bound (the window records key messages; mouse buttons are not in the
+record). Escape and F1 stay fixed. Binding one key to two actions is shown as a conflict but not
+prevented. The controls card and the prompts show the bound names; the settings file stores the
+virtual-key codes with the names beside them for reading.
 
 ## KI-012 — info — all builds — raw mode is noisy by design
 

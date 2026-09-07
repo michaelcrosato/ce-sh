@@ -60,6 +60,7 @@ struct Ui::Impl {
     ImGuiContext* context = nullptr;
     bool frameOpen = false;
     float dpiScale = 1.0f;
+    int capturingAction = -1;  // The action whose key the menu waits for (-1: none).
 
     static void AllocateSrv(ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE* cpu, D3D12_GPU_DESCRIPTOR_HANDLE* gpu) {
         auto* self = static_cast<Impl*>(info->UserData);
@@ -156,13 +157,16 @@ Ui::~Ui() {
     ImGui::DestroyContext(impl_->context);
 }
 
-void Ui::BeginFrame() {
+void Ui::BeginFrame(float uiScale) {
     if (impl_->frameOpen) ImGui::EndFrame();  // A frame that was never rendered (minimised window).
+    ImGui::GetStyle().FontScaleMain = std::clamp(uiScale, game::kUiScaleMin, game::kUiScaleMax);
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     impl_->frameOpen = true;
 }
+
+bool Ui::CapturingKey() const { return impl_->capturingAction >= 0; }
 
 void Ui::DrawOverlay(const Overlay& overlay) {
     const ImVec2 size = DisplaySize();
@@ -179,10 +183,10 @@ void Ui::DrawOverlay(const Overlay& overlay) {
     if (!overlay.prompt.empty() || !overlay.hint.empty()) {
         if (BeginPinned("##prompt", ImVec2(size.x * 0.5f, size.y - 48.0f * s), ImVec2(0.5f, 1.0f), 0.6f)) {
             ImGui::PushFont(nullptr, kPromptFontSize);
-            if (!overlay.prompt.empty()) KeyLine("E", overlay.prompt);
+            if (!overlay.prompt.empty()) KeyLine(overlay.interactKey.c_str(), overlay.prompt);
             ImGui::PopFont();
             ImGui::PushFont(nullptr, kBodyFontSize);
-            if (!overlay.hint.empty()) KeyLine("F", overlay.hint);
+            if (!overlay.hint.empty()) KeyLine(overlay.lampKey.c_str(), overlay.hint);
             ImGui::PopFont();
         }
         ImGui::End();
@@ -218,13 +222,17 @@ void Ui::DrawOverlay(const Overlay& overlay) {
             ImGui::PushFont(nullptr, kBodyFontSize);
             ImGui::TextDisabled("The building is on its last circuit. Find the light, keep it, and get out.");
             ImGui::Spacing();
-            KeyLine("W A S D", "Move");
-            KeyLine("Mouse", "Look");
-            KeyLine("Shift", "Sprint");
-            KeyLine("E", "Interact: doors, the lamp, its sockets");
-            KeyLine("F", "Lamp on / off");
-            KeyLine("Esc", "Pause menu and settings");
-            KeyLine("F1", "Diagnostic panel");
+            if (overlay.controls.empty()) {
+                KeyLine("W A S D", "Move");
+                KeyLine("Mouse", "Look");
+                KeyLine("Shift", "Sprint");
+                KeyLine("E", "Interact: doors, the lamp, the fuse, their sockets");
+                KeyLine("F", "Lamp on / off");
+                KeyLine("Esc", "Pause menu and settings");
+                KeyLine("F1", "Diagnostic panel");
+            } else {
+                for (const auto& [key, action] : overlay.controls) KeyLine(key.c_str(), action);
+            }
             ImGui::Spacing();
             ImGui::TextDisabled("Move or look around to begin.");
             ImGui::PopFont();
@@ -233,11 +241,13 @@ void Ui::DrawOverlay(const Overlay& overlay) {
     }
 }
 
-MenuAction Ui::DrawPauseMenu(Settings& settings, bool& showDiagnostics) {
+MenuAction Ui::DrawPauseMenu(Settings& settings, bool& showDiagnostics, const MenuInfo& info) {
     MenuAction action = MenuAction::None;
     const ImVec2 size = DisplaySize();
+    const float s = impl_->dpiScale;
     ImGui::SetNextWindowPos(ImVec2(size.x * 0.5f, size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(std::min(size.x - 40.0f, 460.0f * impl_->dpiScale), 0.0f), ImGuiCond_Always);  // Height auto-fits.
+    ImGui::SetNextWindowSize(ImVec2(std::min(size.x - 40.0f, 520.0f * s), 0.0f), ImGuiCond_Always);  // Height auto-fits.
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(size.x - 40.0f, size.y - 40.0f));  // Scrolls when the screen is small.
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::Begin("Paused", nullptr, flags)) {
         const float buttonWidth = ImGui::GetContentRegionAvail().x;
@@ -248,23 +258,91 @@ MenuAction Ui::DrawPauseMenu(Settings& settings, bool& showDiagnostics) {
         if (ImGui::Button("Quit", ImVec2(buttonWidth, 0.0f))) action = MenuAction::Quit;
         ImGui::PopFont();
 
-        ImGui::SeparatorText("Settings");
-        ImGui::PushItemWidth(-140.0f * impl_->dpiScale);
-        float sensitivity = settings.mouseSensitivity * 1000.0f;
-        if (ImGui::SliderFloat("Mouse sensitivity", &sensitivity, 0.5f, 10.0f, "%.2f")) {
-            settings.mouseSensitivity = sensitivity / 1000.0f;
+        if (ImGui::CollapsingHeader("Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushItemWidth(-150.0f * s);
+            float sensitivity = settings.mouseSensitivity * 1000.0f;
+            if (ImGui::SliderFloat("Mouse sensitivity", &sensitivity, game::kSensitivityMin * 1000.0f, game::kSensitivityMax * 1000.0f, "%.2f")) {
+                settings.mouseSensitivity = sensitivity / 1000.0f;
+            }
+            ImGui::Checkbox("Invert vertical look", &settings.invertY);
+            ImGui::SliderFloat("Field of view", &settings.horizontalFovDegrees, game::kFovMin, game::kFovMax, "%.0f deg (horizontal)");
+            ImGui::SliderFloat("Brightness", &settings.exposure, game::kExposureMin, game::kExposureMax, "%.2fx exposure", ImGuiSliderFlags_Logarithmic);
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("Brightness is a display scale (%.2fx to %.2fx). What the machine can see never depends on it.", game::kExposureMin, game::kExposureMax);
+            ImGui::PopTextWrapPos();
+            ImGui::SliderFloat("Master volume", &settings.masterVolume, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Effects volume", &settings.effectsVolume, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Ambience volume", &settings.ambienceVolume, 0.0f, 1.0f, "%.2f");
+            ImGui::Checkbox("Text cues for important sounds", &settings.textCues);
+            ImGui::SliderFloat("Interface scale", &settings.uiScale, game::kUiScaleMin, game::kUiScaleMax, "%.2fx");
+            ImGui::Checkbox("Diagnostic panel (F1)", &showDiagnostics);
+            ImGui::PopItemWidth();
+            if (!info.rendering.empty()) {
+                ImGui::Spacing();
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextDisabled("%s", info.rendering.c_str());
+                ImGui::PopTextWrapPos();
+            }
         }
-        ImGui::Checkbox("Invert vertical look", &settings.invertY);
-        ImGui::SliderFloat("Field of view", &settings.horizontalFovDegrees, 60.0f, 110.0f, "%.0f deg (horizontal)");
-        ImGui::SliderFloat("Exposure", &settings.exposure, 0.25f, 4.0f, "%.2fx", ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderFloat("Master volume", &settings.masterVolume, 0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Effects volume", &settings.effectsVolume, 0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Ambience volume", &settings.ambienceVolume, 0.0f, 1.0f, "%.2f");
-        ImGui::Checkbox("Text cues for important sounds", &settings.textCues);
-        ImGui::Checkbox("Diagnostic panel (F1)", &showDiagnostics);
-        ImGui::PopItemWidth();
+
+        if (ImGui::CollapsingHeader("Controls")) {
+            // One row per action: the key's name is a button; pressing it waits for the next key. The
+            // key edges come from the window's raw input record (D-042), consumed here.
+            const ImVec4 warn{0.95f, 0.75f, 0.35f, 1.0f};
+            if (ImGui::BeginTable("bindings", 3, ImGuiTableFlags_SizingFixedFit)) {
+                for (std::size_t i = 0; i < game::kActionCount; ++i) {
+                    const game::Action a = static_cast<game::Action>(i);
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(game::ActionName(a));
+                    ImGui::TableSetColumnIndex(1);
+                    const bool listening = impl_->capturingAction == static_cast<int>(i);
+                    const std::string label = listening ? "press a key..." : game::KeyName(settings.bindings[a]);
+                    ImGui::PushID(static_cast<int>(i));
+                    if (ImGui::Button(label.c_str(), ImVec2(150.0f * s, 0.0f))) impl_->capturingAction = listening ? -1 : static_cast<int>(i);
+                    ImGui::PopID();
+                    ImGui::TableSetColumnIndex(2);
+                    const std::vector<game::Action> conflicts = game::Conflicts(settings.bindings, a);
+                    if (!conflicts.empty()) {
+                        std::string also;
+                        for (const game::Action c : conflicts) also += (also.empty() ? "also " : ", ") + std::string(game::ActionName(c));
+                        ImGui::TextColored(warn, "%s", also.c_str());
+                    }
+                }
+                ImGui::EndTable();
+            }
+            if (impl_->capturingAction >= 0 && impl_->window != nullptr) {
+                const RawInputState& raw = impl_->window->Input();
+                for (unsigned vk = 0x08; vk < 0xFF; ++vk) {
+                    if (!raw.keyPressed[vk]) continue;
+                    impl_->window->ConsumeKeyPressed(vk);
+                    if (vk == game::kKeyEscape) {
+                        impl_->capturingAction = -1;  // Cancelled.
+                    } else if (game::IsBindable(vk)) {
+                        settings.bindings.keys[static_cast<std::size_t>(impl_->capturingAction)] = vk;
+                        log::Info("bound {} to {}", game::ActionName(static_cast<game::Action>(impl_->capturingAction)), game::KeyName(vk));
+                        impl_->capturingAction = -1;
+                    }
+                    break;
+                }
+            }
+            if (ImGui::Button("Reset the keys to W A S D, Shift, E, F")) settings.bindings = game::Bindings{};
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("Esc opens this menu and F1 the diagnostic panel; those two stay fixed. Mouse buttons cannot be bound.");
+            ImGui::PopTextWrapPos();
+        }
+
+        if (ImGui::CollapsingHeader("About")) {
+            ImGui::PushTextWrapPos(0.0f);
+            if (!info.buildId.empty()) ImGui::TextUnformatted(info.buildId.c_str());
+            ImGui::TextDisabled("This software contains source code provided by NVIDIA Corporation.");
+            ImGui::TextDisabled("NVIDIA Real-Time Denoisers (NVIDIA RTX SDKs License), Dear ImGui (MIT), NVIDIA MathLib (MIT), miniaudio (MIT No Attribution).");
+            if (!info.noticesPath.empty()) ImGui::TextDisabled("Full notices: %s", info.noticesPath.c_str());
+            if (!info.settingsPath.empty()) ImGui::TextDisabled("Settings file: %s", info.settingsPath.c_str());
+            ImGui::PopTextWrapPos();
+        }
         ImGui::Spacing();
-        ImGui::TextDisabled("Esc resumes. Settings apply immediately.");
+        ImGui::TextDisabled("Esc resumes. Settings apply immediately and are saved.");
     }
     ImGui::End();
     return action;

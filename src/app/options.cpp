@@ -53,7 +53,11 @@ bool ParseUnsignedList(std::string_view text, char separator, std::span<std::uin
 ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     ArgParser p;
     p.AddFlag("help", "Print this help and exit.");
-    p.AddStringOption("scene", "Built-in scene name (see docs/TESTS.md for the list).", "rt_triangle");
+    p.AddFlag("version", "Print the version and build identification, then exit.");
+    p.AddStringOption("scene",
+                      "Scene name: a level file scenes/<name>.json (last_circuit = six_room, the demo; mirror_lab = two_room, the proof) "
+                      "or a built-in test scene (see docs/TESTS.md for the list).",
+                      "rt_triangle");
     p.AddStringOption("scene-file", "Scene file inside the asset root (for example scenes/two_room.json); replaces --scene.", "");
     p.AddFlag("reload-test", "Render, reload the scene file at a frame boundary, render again, and verify (headless).");
     p.AddIntOption("width", "Window client width in pixels (and the trace width unless --internal is given).", 1280);
@@ -85,11 +89,13 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     p.AddIntOption("frames", "Exit after this many rendered frames; 0 = run until closed (reference mode: until --spp is reached).", 0);
     p.AddFloatOption("fov", "Horizontal field of view in degrees at the current aspect ratio.", 90.0f);
     p.AddStringOption("capture", "Directory that receives PNG, PFM, and JSON captures of the final image.", "");
-    p.AddIntOption("capture-backbuffer", "Windowed runs with --capture: also write the presented back buffer (interface included, alpha as a second image) of this frame.", -1);
+    p.AddStringOption("capture-backbuffer", "Windowed runs with --capture: also write the presented back buffer (interface included, alpha as a second image) of these frames (a comma-separated list).", "");
     p.AddStringOption("stats", "Write patch means and standard errors of the scene's statistics patches to this JSON file.", "");
     p.AddStringOption("env-report", "Write a JSON environment report to this file.", "");
-    p.AddStringOption("log", "Append the log to this file.", "");
-    p.AddFlag("play", "Live play (scene two_room): WASD move, mouse look, Shift sprint, E interact, F lamp, Escape releases the cursor.");
+    p.AddStringOption("log", "Append the log to this file (play without --log: %LOCALAPPDATA%\\LastCircuit\\logs\\LastCircuit-<time>.log).", "");
+    p.AddFlag("no-dialog", "Never show a message box for a startup failure (headless, validate, list-adapters, and simulate-only runs never do).");
+    p.AddStringOption("settings", "Play: the settings file to load and save (default: %LOCALAPPDATA%\\LastCircuit\\settings.json).", "");
+    p.AddFlag("play", "Live play of a level (last_circuit, two_room): WASD move, mouse look, Shift sprint, E interact, F lamp, Escape the menu; the keys are rebindable in the menu.");
     p.AddFlag("no-ui", "Windowed runs: no prompts, pause menu (Escape), or diagnostic panel (F1); the benchmark never draws them.");
     p.AddFlag("no-audio", "Windowed runs: open no audio device (sound events still produce their text cues).");
     p.AddStringOption("threat", "With --play: the threat's behaviour, 'hunt' (patrol, chase, investigate, wait) or 'patrol' (the fixed path). Replays carry their own 'threat' field.", "hunt");
@@ -117,7 +123,8 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
 
     ParsedOptions result;
     result.usage = p.Usage("LastCircuit.exe",
-                           "Last Circuit: custom D3D12 engine with mandatory hardware path tracing (M4: stable real-time image).");
+                           "Last Circuit: custom D3D12 engine with mandatory hardware path tracing (M7: external test package). "
+                           "Without any argument the demo starts in play.");
 
     if (const auto error = p.Parse(args)) {
         result.error = *error;
@@ -126,7 +133,12 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
 
     AppOptions o;
     o.help = p.Has("help");
-    o.scene = p.GetString("scene");
+    o.version = p.Has("version");
+    o.noDialog = p.Has("no-dialog");
+    o.exposureSet = p.Has("exposure");
+    o.fovSet = p.Has("fov");
+    o.sensitivitySet = p.Has("sensitivity");
+    o.scene = ResolveSceneAlias(p.GetString("scene"));
     if (const std::string s = p.GetString("scene-file"); !s.empty()) {
         o.sceneFile = std::filesystem::path(s);
         if (p.Has("scene")) {
@@ -272,10 +284,25 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     }
 
     if (const std::string s = p.GetString("capture"); !s.empty()) o.capture = std::filesystem::path(s);
-    o.captureBackBuffer = p.GetInt("capture-backbuffer");
-    if (o.captureBackBuffer >= 0 && (!o.capture || o.headless)) {
-        result.error = "--capture-backbuffer needs --capture <dir> and a window";
-        return result;
+    if (const std::string s = p.GetString("capture-backbuffer"); !s.empty()) {
+        std::string_view rest = s;
+        while (!rest.empty()) {
+            const std::size_t comma = rest.find(',');
+            const std::string_view token = rest.substr(0, comma);
+            unsigned long long value = 0;
+            const auto res = std::from_chars(token.data(), token.data() + token.size(), value);
+            if (token.empty() || res.ec != std::errc() || res.ptr != token.data() + token.size() || value > 0xFFFFFFFFull) {
+                result.error = std::format("--capture-backbuffer expects frame numbers separated by commas (got '{}')", s);
+                return result;
+            }
+            o.captureBackBufferFrames.push_back(static_cast<std::uint32_t>(value));
+            if (comma == std::string_view::npos) break;
+            rest.remove_prefix(comma + 1);
+        }
+        if (!o.capture || o.headless) {
+            result.error = "--capture-backbuffer needs --capture <dir> and a window";
+            return result;
+        }
     }
     if (const std::string s = p.GetString("stats"); !s.empty()) o.stats = std::filesystem::path(s);
     if (const std::string s = p.GetString("env-report"); !s.empty()) o.envReport = std::filesystem::path(s);
@@ -289,6 +316,13 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     o.play = p.Has("play");
     o.noUi = p.Has("no-ui");
     o.noAudio = p.Has("no-audio");
+    if (const std::string s = p.GetString("settings"); !s.empty()) {
+        if (!o.play) {
+            result.error = "--settings requires --play";
+            return result;
+        }
+        o.settingsFile = std::filesystem::path(s);
+    }
     if (const std::string s = p.GetString("record"); !s.empty()) o.record = std::filesystem::path(s);
     if (const std::string s = p.GetString("replay"); !s.empty()) o.replay = std::filesystem::path(s);
     o.stopAtTick = p.GetInt("stop-at-tick");
@@ -421,5 +455,13 @@ ParsedOptions ParseAppOptions(std::span<const std::string> args) {
     result.options = std::move(o);
     return result;
 }
+
+std::string ResolveSceneAlias(const std::string& scene) {
+    if (scene == "last_circuit") return "six_room";  // The demo (spec §5, §21).
+    if (scene == "mirror_lab") return "two_room";    // The proof (spec §4, §21).
+    return scene;
+}
+
+std::vector<std::string> GameLaunchArguments() { return {"--scene", "last_circuit", "--play", "--mode", "denoised"}; }
 
 }  // namespace lc

@@ -19,4 +19,8 @@ bool WriteTextFile(const std::filesystem::path& path, std::string_view text);
 std::filesystem::path ExecutablePath();
 std::filesystem::path ExecutableDirectory();
 
+// The user's writable data directory for settings and logs: %LOCALAPPDATA%\LastCircuit (created
+// on demand); <executable dir>\userdata when the variable is not set.
+std::filesystem::path UserDataDirectory();
+
 }  // namespace lc::files

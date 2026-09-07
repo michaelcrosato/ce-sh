@@ -160,10 +160,11 @@ on, no interface) into `artifacts/m5/benchmark_release_*.json` and prints one su
 the encounter replay (it loops with a world reset) and one of the caught variant, the same settings,
 into `artifacts/m6/benchmark_release_*.json`.
 
-`--capture-backbuffer <frame>` (windowed, with `--capture <dir>`) writes the presented back buffer
-of that frame, interface included, as `backbuffer_frame<N>.png` plus its alpha channel as
-`backbuffer_frame<N>_alpha.png`, and logs how many pixels have alpha below 255 (the evidence
-behind KI-028: desktop screen captures of the window can show holes the app never draws).
+`--capture-backbuffer <frames>` (windowed, with `--capture <dir>`; a comma-separated list) writes
+the presented back buffer of each listed frame, interface included, as `backbuffer_frame<N>.png`
+plus its alpha channel as `backbuffer_frame<N>_alpha.png`, and logs how many pixels have alpha
+below 255 (the evidence behind KI-028: desktop screen captures of the window can show holes the app
+never draws). Windowed replay runs draw the interface (prompts, objective, cards) like play does.
 
 `--history-frames`, `--prepass-radius`, `--blur-radius`, `--no-antifirefly`,
 `--validation-overlay`, and `--reset-on-source-change` tune the denoiser (docs/RENDERING.md);
@@ -180,7 +181,39 @@ Exit codes: `0` success, `1` failure (validation failed, device removed, unhandl
 `2` usage error, `3` unsupported hardware (no adapter with DXR Tier 1.1 and Shader Model 6.5).
 CTest treats `3` as "skipped", never as passed.
 
-## Packaging
+## Packaging (M7)
 
-Not implemented yet (milestone M7). Release builds link the dynamic CRT, so a package will need the
-Visual C++ redistributable; Debug builds use the debug CRT and are not redistributable.
+```powershell
+.\tools\package.ps1                     # build the Release preset, package into dist\, zip with a SHA-256 file
+.\tools\package.ps1 -NoBuild -SmokeTest # package what is built and run the package's smoke test from its directory
+```
+
+The package `dist\LastCircuit-<version>-<commit>-win64\` holds `LastCircuit.exe` (static CRT: no
+redistributable), `shaders\`, `assets\`, `replays\` (the encounter and its caught variant),
+`NOTICES.txt` (generated: the NVIDIA attribution and every shipped license text verbatim),
+`README.txt` (from `tools/package/README.txt`: play, controls, settings and log locations, the two
+commands), `KNOWN_ISSUES.md`, `smoke_test.cmd`, `benchmark.cmd`, and `manifest.txt` (size and
+SHA-256 per file). The script refuses a package whose executable imports anything that is not a
+Windows in-box library (the PE import tables are parsed), and `package_smoke` under CTest runs the
+same assembly plus the smoke test for the current configuration. The symbols (`.pdb`) are copied
+beside the package, not into it.
+
+A tester double-clicks `LastCircuit.exe`: without arguments the demo starts in play (reconstructed
+mode), the console that Windows opens for it closes at once, the play log goes to
+`%LOCALAPPDATA%\LastCircuit\logs\`, and a startup failure shows a message box with the reason and
+the log path (`--no-dialog` and every automated mode never show one). `--version` prints the build
+identification. `smoke_test.cmd` runs the adapters and environment report, the T01 diagnostic
+validation, 600 reconstructed frames of the encounter with its checks, and a ten-second benchmark;
+`benchmark.cmd` runs the §17 protocol (5 s warm-up, 180 s measured, 1920x1080 from 1280x720,
+vsync off) and prints the percentiles against the pass criterion.
+
+Settings (look, brightness 0.25x–8x, volumes, text cues, interface scale, key bindings) persist in
+`%LOCALAPPDATA%\LastCircuit\settings.json` (`--settings <file>` to use another); only play reads the
+file, so replays, benchmarks, and tests never depend on it; `--exposure`, `--fov`, and
+`--sensitivity` on the command line override it for that run. The pause menu's Controls section
+rebinds the seven actions (Escape and F1 stay fixed); its About section carries the build id and
+the third-party notices.
+
+`tools/capture_gameplay.ps1` writes the presented frames (interface included) of the encounter
+replay at twelve key ticks into `artifacts/m7/gameplay` (`--capture-backbuffer` takes a
+comma-separated list of frames).

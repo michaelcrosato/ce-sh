@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <format>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -23,6 +24,8 @@ void Write(Level level, std::string_view message);
 
 // Number of Error-level messages written since Init (counted even when filtered by level).
 std::size_t ErrorCount();
+// The most recent Error-level message (empty when none): the startup dialog repeats it.
+std::string LastError();
 
 template <class... Args>
 void Trace(std::format_string<Args...> fmt, Args&&... args) {

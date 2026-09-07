@@ -7,6 +7,14 @@
 
 #include <string>
 
+LC_TEST(log_keeps_the_last_error_for_the_startup_dialog) {
+    lc::log::Error("first problem {} (expected in the test output)", 1);
+    lc::log::Error("second problem {} (expected in the test output)", 2);
+    LC_CHECK_EQ(lc::log::LastError(), std::string("second problem 2 (expected in the test output)"));
+    lc::log::Warn("a warning does not replace it");
+    LC_CHECK_EQ(lc::log::LastError(), std::string("second problem 2 (expected in the test output)"));
+}
+
 LC_TEST(log_counts_errors_even_when_filtered) {
     lc::log::Init(nullptr);
     lc::log::SetMinLevel(lc::log::Level::Error);

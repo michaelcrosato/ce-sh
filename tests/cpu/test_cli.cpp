@@ -21,6 +21,33 @@ std::vector<std::string> Args(std::initializer_list<const char*> list) { return 
 
 }  // namespace
 
+LC_TEST(cli_version_aliases_and_the_game_launch) {
+    const auto version = lc::ParseAppOptions(Args({"--version"}));
+    LC_REQUIRE(version.options.has_value());
+    LC_CHECK(version.options->version);
+    // The spec's level names (§21) resolve to the scene files; other names pass through.
+    LC_CHECK_EQ(lc::ResolveSceneAlias("last_circuit"), std::string("six_room"));
+    LC_CHECK_EQ(lc::ResolveSceneAlias("mirror_lab"), std::string("two_room"));
+    LC_CHECK_EQ(lc::ResolveSceneAlias("rt_boxes"), std::string("rt_boxes"));
+    const auto demo = lc::ParseAppOptions(Args({"--scene", "last_circuit", "--play"}));
+    LC_REQUIRE(demo.options.has_value());
+    LC_CHECK_EQ(demo.options->scene, std::string("six_room"));
+    // A launch without arguments is the demo in play, reconstructed, with a window.
+    const auto launch = lc::ParseAppOptions(lc::GameLaunchArguments());
+    LC_REQUIRE(launch.options.has_value());
+    LC_CHECK(launch.options->play);
+    LC_CHECK(launch.options->mode == lc::AppRenderMode::Denoised);
+    LC_CHECK_EQ(launch.options->scene, std::string("six_room"));
+    LC_CHECK(!launch.options->headless);
+    LC_CHECK(!launch.options->noDialog);
+    const auto quiet = lc::ParseAppOptions(Args({"--no-dialog", "--play", "--settings", "s.json"}));
+    LC_REQUIRE(quiet.options.has_value());
+    LC_CHECK(quiet.options->noDialog);
+    LC_REQUIRE(quiet.options->settingsFile.has_value());
+    LC_CHECK_EQ(quiet.options->settingsFile->string(), std::string("s.json"));
+    LC_CHECK(!lc::ParseAppOptions(Args({"--settings", "s.json"})).options.has_value());  // The settings file belongs to play.
+}
+
 LC_TEST(cli_unknown_option_is_an_error) {
     auto p = MakeParser();
     const auto err = p.Parse(Args({"--bogus"}));

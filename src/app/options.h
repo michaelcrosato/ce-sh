@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace lc {
 
@@ -50,7 +51,7 @@ struct AppOptions {
     std::uint32_t frames = 0;     // 0 = run until the window closes (or the reference target is reached).
     float horizontalFovDegrees = 90.0f;
     std::optional<std::filesystem::path> capture;
-    std::int64_t captureBackBuffer = -1;                // Frame whose presented back buffer (interface included) is written beside the capture.
+    std::vector<std::uint32_t> captureBackBufferFrames; // Frames whose presented back buffer (interface included) is written beside the capture.
     std::optional<std::filesystem::path> stats;
     std::optional<std::filesystem::path> envReport;
     std::optional<std::filesystem::path> logFile;
@@ -86,6 +87,13 @@ struct AppOptions {
     float warmupSeconds = 5.0f;
     std::optional<std::filesystem::path> report;
     bool help = false;
+    // The package (M7): identification, the settings file of play, and the startup dialog.
+    bool version = false;                               // Print the version and build identification, then exit.
+    bool noDialog = false;                              // Never show a message box for a startup failure.
+    std::optional<std::filesystem::path> settingsFile;  // Play: the settings file (default: the user's data directory).
+    bool exposureSet = false;                           // --exposure, --fov, --sensitivity given: they override the settings file in play.
+    bool fovSet = false;
+    bool sensitivitySet = false;
 };
 
 struct ParsedOptions {
@@ -95,5 +103,13 @@ struct ParsedOptions {
 };
 
 ParsedOptions ParseAppOptions(std::span<const std::string> args);
+
+// The spec's names for the levels (§21): `last_circuit` is the six-room demo, `mirror_lab` the
+// two-room proof; every other name is returned unchanged.
+std::string ResolveSceneAlias(const std::string& scene);
+
+// The arguments of a launch without any (a double-click on the executable): the demo in play,
+// reconstructed. Any argument at all keeps the developer interface with its own defaults.
+std::vector<std::string> GameLaunchArguments();
 
 }  // namespace lc
