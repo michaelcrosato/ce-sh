@@ -22,7 +22,11 @@ bool WriteCapture(const std::filesystem::path& dir, const std::string& baseName,
     j.BeginObject();
     j.Field("scene", meta.scene);
     j.Field("view", meta.view);
-    j.Field("diagnosticView", true);
+    j.Field("mode", meta.mode);
+    j.Field("strategy", meta.strategy);
+    j.Field("diagnosticView", meta.mode == "diag");
+    j.Field("emitterCount", meta.emitterCount);
+    j.Field("linearIsRadiance", meta.mode != "diag");
     j.Field("frameIndex", meta.frameIndex);
     j.Field("sampleIndex", meta.sampleIndex);
     j.Field("seed", meta.seed);

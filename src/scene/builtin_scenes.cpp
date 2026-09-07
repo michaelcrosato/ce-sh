@@ -201,31 +201,40 @@ SceneDescription BuildT09RectLight(bool large) {
     return d;
 }
 
-// T07: white room, red box near the left wall, white box near the right wall; the floor next to the
-// red box must be redder than the floor next to the white box.
+// T07: white room whose -X wall is red and +X wall is white, lit by a ceiling panel. The floor next
+// to the red wall receives red indirect light; the mirror-image patch next to the white wall does
+// not. Both patches are lit directly by the same panel, so the ratio isolates the indirect colour.
 SceneDescription BuildT07Bleed() {
     SceneDescription d;
     d.name = "t07_bleed";
     d.needsLighting = true;
     const std::uint32_t white = AddDiffuse(d.scene, "white", {0.8f, 0.8f, 0.8f});
     const std::uint32_t red = AddDiffuse(d.scene, "red", {0.8f, 0.1f, 0.1f});
-    AddRoom(d.scene, "room", kStandardRoom, {white, white, white});
-    AddBox(d.scene, "red_box", {0.3f, 0.3f, 0.3f}, {-1.6f, 0.3f, 0.0f}, red);
-    AddBox(d.scene, "white_box", {0.3f, 0.3f, 0.3f}, {1.6f, 0.3f, 0.0f}, white);
+    const RoomSpec room = kStandardRoom;
+    const float t = room.wallThickness;
+    const Vec3 lo = room.innerMin;
+    const Vec3 hi = room.innerMax;
+    AddBox(d.scene, "room_floor", {(hi.x - lo.x) * 0.5f + t, t * 0.5f, (hi.z - lo.z) * 0.5f + t}, {0.0f, lo.y - t * 0.5f, 0.0f}, white);
+    AddBox(d.scene, "room_ceiling", {(hi.x - lo.x) * 0.5f + t, t * 0.5f, (hi.z - lo.z) * 0.5f + t}, {0.0f, hi.y + t * 0.5f, 0.0f}, white);
+    AddBox(d.scene, "room_wall_neg_x_red", {t * 0.5f, (hi.y - lo.y) * 0.5f, (hi.z - lo.z) * 0.5f + t}, {lo.x - t * 0.5f, (lo.y + hi.y) * 0.5f, 0.0f}, red);
+    AddBox(d.scene, "room_wall_pos_x", {t * 0.5f, (hi.y - lo.y) * 0.5f, (hi.z - lo.z) * 0.5f + t}, {hi.x + t * 0.5f, (lo.y + hi.y) * 0.5f, 0.0f}, white);
+    AddBox(d.scene, "room_wall_neg_z", {(hi.x - lo.x) * 0.5f, (hi.y - lo.y) * 0.5f, t * 0.5f}, {0.0f, (lo.y + hi.y) * 0.5f, lo.z - t * 0.5f}, white);
+    AddBox(d.scene, "room_wall_pos_z", {(hi.x - lo.x) * 0.5f, (hi.y - lo.y) * 0.5f, t * 0.5f}, {0.0f, (lo.y + hi.y) * 0.5f, hi.z + t * 0.5f}, white);
+    AddBox(d.scene, "crate", {0.3f, 0.3f, 0.3f}, {0.0f, 0.3f, -1.0f}, white);
     const std::uint32_t lamp = AddEmitter(d.scene, "ceiling_panel", {8.0f, 8.0f, 8.0f});
     AddRectangleEmitter(d.scene, "ceiling_panel", 1.0f, 1.0f, {0.0f, 2.79f, 0.0f}, {0.0f, -1.0f, 0.0f}, lamp);
     d.camera.position = {0.0f, 1.6f, 1.8f};
-    d.camera.LookAt({0.0f, 0.6f, -0.5f});
-    const Vec3 nearRed{-1.15f, 0.0f, 0.0f};
-    const Vec3 nearWhite{1.15f, 0.0f, 0.0f};
+    d.camera.LookAt({0.0f, 0.5f, -0.6f});
+    const Vec3 nearRed{-1.85f, 0.0f, 0.0f};
+    const Vec3 nearWhite{1.85f, 0.0f, 0.0f};
     RadianceExpectation ratio;
     ratio.kind = RadianceExpectation::Kind::RatioGreaterThan;
-    ratio.description = "floor beside the red box is redder than beside the white box (indirect colour)";
+    ratio.description = "floor beside the red wall is redder than beside the white wall (indirect colour)";
     ratio.point = nearRed;
     ratio.otherPoint = nearWhite;
     ratio.ratioFactor = 1.2f;
-    d.radianceExpectations = {ratio, Positive("floor beside the red box is lit", nearRed), Positive("floor beside the white box is lit", nearWhite)};
-    d.statsPatches = {{"near_red", nearRed, 3}, {"near_white", nearWhite, 3}};
+    d.radianceExpectations = {ratio, Positive("floor beside the red wall is lit", nearRed), Positive("floor beside the white wall is lit", nearWhite)};
+    d.statsPatches = {{"near_red", nearRed, 3}, {"near_white", nearWhite, 3}, {"floor_centre", {0.0f, 0.0f, 0.3f}, 3}};
     return d;
 }
 

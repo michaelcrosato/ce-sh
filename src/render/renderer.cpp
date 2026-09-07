@@ -7,17 +7,28 @@
 #include "graphics/d3d12/graphics_queue.h"
 #include "platform/files.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <functional>
 
 namespace lc {
 
 namespace {
 
-constexpr std::uint32_t kUavCount = 4;  // u0 display, u1 linear, u2 hit info, u3 layout probe.
-constexpr std::uint64_t kArenaBytes = 4ull * 1024 * 1024;
-constexpr std::uint32_t kMaxTimersPerFrame = 16;
+// UAV table layout (root parameter 10).
+constexpr std::uint32_t kUavDisplay = 0;
+constexpr std::uint32_t kUavLinear = 1;
+constexpr std::uint32_t kUavHitInfo = 2;
+constexpr std::uint32_t kUavProbe = 3;
+constexpr std::uint32_t kUavAccum = 4;
+constexpr std::uint32_t kUavAccumSq = 5;
+constexpr std::uint32_t kUavStats = 6;
+constexpr std::uint32_t kUavCount = 7;
+
+constexpr std::uint64_t kArenaBytes = 8ull * 1024 * 1024;
+constexpr std::uint32_t kMaxTimersPerFrame = 24;
 
 gpu::Float4x4 ToGpu(const math::Mat4& m) {
     gpu::Float4x4 r;
@@ -36,7 +47,70 @@ std::span<const std::uint8_t> AsBytes(const T& value) {
     return {reinterpret_cast<const std::uint8_t*>(&value), sizeof(T)};
 }
 
+std::uint64_t HashCombine(std::uint64_t h, std::uint64_t v) {
+    h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+    return h;
+}
+
+std::uint64_t HashFloat(std::uint64_t h, float f) { return HashCombine(h, AsUint(f)); }
+
+void CopyRows(const gfx::GpuBuffer& readback, const gfx::ReadbackPlan& plan, std::uint32_t height, std::size_t rowBytes,
+              const std::function<void(std::uint32_t, const std::uint8_t*)>& consume) {
+    auto& rb = const_cast<gfx::GpuBuffer&>(readback);
+    const auto* src = static_cast<const std::uint8_t*>(rb.Map());
+    for (std::uint32_t y = 0; y < height; ++y) {
+        consume(y, src + plan.footprint.Offset + static_cast<std::size_t>(y) * plan.footprint.Footprint.RowPitch);
+    }
+    (void)rowBytes;
+    rb.Unmap();
+}
+
 }  // namespace
+
+const char* RenderModeName(RenderMode mode) {
+    switch (mode) {
+        case RenderMode::Diagnostic: return "diag";
+        case RenderMode::Raw: return "raw";
+        case RenderMode::Reference: return "reference";
+    }
+    return "unknown";
+}
+
+const char* StrategyName(Strategy strategy) {
+    switch (strategy) {
+        case Strategy::Mis: return "mis";
+        case Strategy::Light: return "light";
+        case Strategy::Bsdf: return "bsdf";
+    }
+    return "unknown";
+}
+
+PatchStats ComputePatchStats(const CaptureImages& images, std::uint32_t x, std::uint32_t y, std::uint32_t halfSize) {
+    PatchStats s;
+    const std::uint32_t x0 = x >= halfSize ? x - halfSize : 0;
+    const std::uint32_t y0 = y >= halfSize ? y - halfSize : 0;
+    const std::uint32_t x1 = std::min(images.width - 1, x + halfSize);
+    const std::uint32_t y1 = std::min(images.height - 1, y + halfSize);
+    double sumSe2[3] = {};
+    for (std::uint32_t py = y0; py <= y1; ++py) {
+        for (std::uint32_t px = x0; px <= x1; ++px) {
+            const std::size_t i = (static_cast<std::size_t>(py) * images.width + px) * 3;
+            for (int c = 0; c < 3; ++c) {
+                s.mean[c] += images.linear.pixels[i + c];
+                const double se = images.standardError.pixels.empty() ? 0.0 : images.standardError.pixels[i + c];
+                sumSe2[c] += se * se;
+            }
+            ++s.pixels;
+        }
+    }
+    if (s.pixels > 0) {
+        for (int c = 0; c < 3; ++c) {
+            s.mean[c] /= s.pixels;
+            s.standardError[c] = std::sqrt(sumSe2[c]) / s.pixels;
+        }
+    }
+    return s;
+}
 
 Renderer::Renderer(gfx::Device& device, gfx::GraphicsQueue& queue, std::uint32_t width, std::uint32_t height)
     : device_(device),
@@ -62,21 +136,32 @@ Renderer::Renderer(gfx::Device& device, gfx::GraphicsQueue& queue, std::uint32_t
 
     probeBuffer_ = gfx::GpuBuffer::CreateDefault(device, L"Layout Probe Output", gpu::kLayoutProbeCount * sizeof(std::uint32_t),
                                                  D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    D3D12_UNORDERED_ACCESS_VIEW_DESC probeUav{};
-    probeUav.Format = DXGI_FORMAT_UNKNOWN;
-    probeUav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    probeUav.Buffer.FirstElement = 0;
-    probeUav.Buffer.NumElements = gpu::kLayoutProbeCount;
-    probeUav.Buffer.StructureByteStride = sizeof(std::uint32_t);
-    probeUav.Buffer.CounterOffsetInBytes = 0;
-    probeUav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
-    device.Get()->CreateUnorderedAccessView(probeBuffer_.Get(), nullptr, &probeUav, heap_.At(uavTable_ + 3).cpu);
+    statsBuffer_ = gfx::GpuBuffer::CreateDefault(device, L"Integrator Stats", gpu::kStatsCount * sizeof(std::uint32_t),
+                                                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    statsZero_ = gfx::GpuBuffer::CreateUpload(device, L"Integrator Stats Zero", gpu::kStatsCount * sizeof(std::uint32_t));
+    std::memset(statsZero_.Map(), 0, gpu::kStatsCount * sizeof(std::uint32_t));
+    statsZero_.Unmap();
+
+    auto bufferUav = [&](const gfx::GpuBuffer& buffer, std::uint32_t elements, std::uint32_t slot) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+        uav.Format = DXGI_FORMAT_UNKNOWN;
+        uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uav.Buffer.FirstElement = 0;
+        uav.Buffer.NumElements = elements;
+        uav.Buffer.StructureByteStride = sizeof(std::uint32_t);
+        uav.Buffer.CounterOffsetInBytes = 0;
+        uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+        device.Get()->CreateUnorderedAccessView(buffer.Get(), nullptr, &uav, heap_.At(uavTable_ + slot).cpu);
+    };
+    bufferUav(probeBuffer_, gpu::kLayoutProbeCount, kUavProbe);
+    bufferUav(statsBuffer_, gpu::kStatsCount, kUavStats);
 
     CreateOutputs(width, height);
     CreateRootSignature();
 
     const std::filesystem::path shaderDir = files::ExecutableDirectory() / "shaders";
     cameraView_ = std::make_unique<gfx::ComputePipeline>(device, rootSignature_.Get(), shaderDir / "camera_view.cso", L"Camera View CS");
+    pathTrace_ = std::make_unique<gfx::ComputePipeline>(device, rootSignature_.Get(), shaderDir / "path_trace.cso", L"Path Trace CS");
     layoutProbe_ = std::make_unique<gfx::ComputePipeline>(device, rootSignature_.Get(), shaderDir / "layout_probe.cso", L"Layout Probe CS");
 }
 
@@ -91,17 +176,21 @@ void Renderer::CreateOutputs(std::uint32_t width, std::uint32_t height) {
     display_ = gfx::GpuTexture2D::CreateUav(device_, L"Display RGBA8", width, height, DXGI_FORMAT_R8G8B8A8_UNORM);
     linear_ = gfx::GpuTexture2D::CreateUav(device_, L"Linear RGBA32F", width, height, DXGI_FORMAT_R32G32B32A32_FLOAT);
     hitInfo_ = gfx::GpuTexture2D::CreateUav(device_, L"Hit Info RGBA32U", width, height, DXGI_FORMAT_R32G32B32A32_UINT);
+    accum_ = gfx::GpuTexture2D::CreateUav(device_, L"Accumulation Sum RGBA32F", width, height, DXGI_FORMAT_R32G32B32A32_FLOAT);
+    accumSq_ = gfx::GpuTexture2D::CreateUav(device_, L"Accumulation Sum Of Squares RGBA32F", width, height, DXGI_FORMAT_R32G32B32A32_FLOAT);
 
-    const gfx::GpuTexture2D* textures[3] = {&display_, &linear_, &hitInfo_};
-    for (std::uint32_t i = 0; i < 3; ++i) {
+    const std::pair<const gfx::GpuTexture2D*, std::uint32_t> textures[] = {
+        {&display_, kUavDisplay}, {&linear_, kUavLinear}, {&hitInfo_, kUavHitInfo}, {&accum_, kUavAccum}, {&accumSq_, kUavAccumSq}};
+    for (const auto& [texture, slot] : textures) {
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
-        uav.Format = textures[i]->Format();
+        uav.Format = texture->Format();
         uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         uav.Texture2D.MipSlice = 0;
         uav.Texture2D.PlaneSlice = 0;
-        device_.Get()->CreateUnorderedAccessView(textures[i]->Get(), nullptr, &uav, heap_.At(uavTable_ + i).cpu);
+        device_.Get()->CreateUnorderedAccessView(texture->Get(), nullptr, &uav, heap_.At(uavTable_ + slot).cpu);
     }
-    log::Info("Render outputs created: {}x{} (display RGBA8, linear RGBA32F, hit info RGBA32U)", width, height);
+    accumulationKey_ = 0;  // Size changed: history is invalid.
+    log::Info("Render outputs created: {}x{} (display RGBA8, linear RGBA32F, hit info RGBA32U, accumulation 2x RGBA32F)", width, height);
 }
 
 void Renderer::CreateRootSignature() {
@@ -113,24 +202,32 @@ void Renderer::CreateRootSignature() {
     uavRange.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
     uavRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER1 params[7]{};
+    D3D12_ROOT_PARAMETER1 params[11]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;  // b0 FrameConstants
     params[0].Descriptor = {0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE};
-    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t0 TLAS (rebuilt within the list)
-    params[1].Descriptor = {0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE};
-    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t1 InstanceRecords (per frame)
-    params[2].Descriptor = {1, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE};
-    params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    for (std::uint32_t i = 3; i <= 5; ++i) {  // t2 MeshRecords, t3 positions, t4 indices (static geometry)
-        params[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-        params[i].Descriptor = {i - 1, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC};
-        params[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;  // b1 IntegratorConstants
+    params[1].Descriptor = {1, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE};
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t0 TLAS (rebuilt within the list)
+    params[2].Descriptor = {0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE};
+    params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t1 InstanceRecords (per frame)
+    params[3].Descriptor = {1, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE};
+    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t2 MeshRecords (static geometry)
+    params[4].Descriptor = {2, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC};
+    params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t3 positions
+    params[5].Descriptor = {3, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC};
+    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t4 indices
+    params[6].Descriptor = {4, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC};
+    params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t5 materials (per frame)
+    params[7].Descriptor = {5, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE};
+    params[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t6 emitters (per frame)
+    params[8].Descriptor = {6, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE};
+    params[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;  // t7 emitter triangles (per frame)
+    params[9].Descriptor = {7, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE};
+    params[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;  // u0..u6
+    params[10].DescriptorTable = {1, &uavRange};
+    for (auto& p : params) {
+        p.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     }
-    params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;  // u0..u3
-    params[6].DescriptorTable = {1, &uavRange};
-    params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC desc{};
     desc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
@@ -145,6 +242,19 @@ void Renderer::CreateRootSignature() {
 void Renderer::SetScene(const Scene& scene) {
     queue_.WaitIdle();
     sceneGpu_ = std::make_unique<SceneGpu>(device_, queue_, scene);
+    accumulationKey_ = 0;
+}
+
+void Renderer::SetMode(RenderMode mode) {
+    if (mode != mode_) {
+        mode_ = mode;
+        accumulationKey_ = 0;
+    }
+}
+
+void Renderer::SetIntegrator(const IntegratorSettings& settings) {
+    settings_ = settings;
+    accumulationKey_ = 0;
 }
 
 void Renderer::Resize(std::uint32_t width, std::uint32_t height) {
@@ -158,7 +268,7 @@ void Renderer::Resize(std::uint32_t width, std::uint32_t height) {
     CreateOutputs(width, height);
 }
 
-gpu::FrameConstants Renderer::BuildFrameConstants(const RenderSnapshot& snapshot) const {
+gpu::FrameConstants Renderer::BuildFrameConstants(const RenderSnapshot& snapshot, std::uint32_t sampleIndex, std::uint32_t seed) const {
     gpu::FrameConstants c{};
     const float aspect = static_cast<float>(width_) / static_cast<float>(height_);
     const Camera& cam = snapshot.camera;
@@ -176,29 +286,56 @@ gpu::FrameConstants Renderer::BuildFrameConstants(const RenderSnapshot& snapshot
     c.invRenderSize[0] = 1.0f / static_cast<float>(width_);
     c.invRenderSize[1] = 1.0f / static_cast<float>(height_);
     c.frameIndex = snapshot.frameIndex;
-    c.sampleIndex = 0;
+    c.sampleIndex = sampleIndex;
     c.viewMode = static_cast<std::uint32_t>(snapshot.view);
     c.instanceCount = sceneGpu_ ? sceneGpu_->InstanceCount() : 0;
     c.rayTMin = 0.0f;
     c.rayTMax = cam.farZ;
     c.aspectRatio = aspect;
-    c.seed = 0;
+    c.seed = seed;
     return c;
 }
 
-void Renderer::BindCommon(ID3D12GraphicsCommandList4* list, D3D12_GPU_VIRTUAL_ADDRESS constants, D3D12_GPU_VIRTUAL_ADDRESS tlas,
-                          D3D12_GPU_VIRTUAL_ADDRESS instances, D3D12_GPU_VIRTUAL_ADDRESS meshes, D3D12_GPU_VIRTUAL_ADDRESS positions,
-                          D3D12_GPU_VIRTUAL_ADDRESS indices) {
+std::uint64_t Renderer::AccumulationKey(const RenderSnapshot& snapshot) const {
+    const Camera& cam = snapshot.camera;
+    std::uint64_t h = 0xA5A5A5A5ull;
+    h = HashFloat(h, cam.position.x);
+    h = HashFloat(h, cam.position.y);
+    h = HashFloat(h, cam.position.z);
+    h = HashFloat(h, cam.yawRadians);
+    h = HashFloat(h, cam.pitchRadians);
+    h = HashFloat(h, cam.horizontalFovRadians);
+    h = HashFloat(h, cam.nearZ);
+    h = HashFloat(h, cam.farZ);
+    h = HashCombine(h, width_);
+    h = HashCombine(h, height_);
+    h = HashCombine(h, static_cast<std::uint64_t>(mode_));
+    h = HashCombine(h, settings_.maxHits);
+    h = HashCombine(h, static_cast<std::uint64_t>(settings_.strategy));
+    h = HashCombine(h, settings_.seed);
+    h = HashCombine(h, settings_.jitter ? 1u : 0u);
+    h = HashCombine(h, sceneGpu_ ? sceneGpu_->SceneRevisionHash() : 0);
+    return h == 0 ? 1 : h;
+}
+
+void Renderer::BindCommon(ID3D12GraphicsCommandList4* list, D3D12_GPU_VIRTUAL_ADDRESS constants, D3D12_GPU_VIRTUAL_ADDRESS integrator,
+                          D3D12_GPU_VIRTUAL_ADDRESS tlas, D3D12_GPU_VIRTUAL_ADDRESS instances, D3D12_GPU_VIRTUAL_ADDRESS meshes,
+                          D3D12_GPU_VIRTUAL_ADDRESS positions, D3D12_GPU_VIRTUAL_ADDRESS indices, D3D12_GPU_VIRTUAL_ADDRESS materials,
+                          D3D12_GPU_VIRTUAL_ADDRESS emitters, D3D12_GPU_VIRTUAL_ADDRESS emitterTriangles) {
     ID3D12DescriptorHeap* heaps[] = {heap_.Get()};
     list->SetDescriptorHeaps(1, heaps);
     list->SetComputeRootSignature(rootSignature_.Get());
     list->SetComputeRootConstantBufferView(0, constants);
-    list->SetComputeRootShaderResourceView(1, tlas);
-    list->SetComputeRootShaderResourceView(2, instances);
-    list->SetComputeRootShaderResourceView(3, meshes);
-    list->SetComputeRootShaderResourceView(4, positions);
-    list->SetComputeRootShaderResourceView(5, indices);
-    list->SetComputeRootDescriptorTable(6, heap_.At(uavTable_).gpu);
+    list->SetComputeRootConstantBufferView(1, integrator);
+    list->SetComputeRootShaderResourceView(2, tlas);
+    list->SetComputeRootShaderResourceView(3, instances);
+    list->SetComputeRootShaderResourceView(4, meshes);
+    list->SetComputeRootShaderResourceView(5, positions);
+    list->SetComputeRootShaderResourceView(6, indices);
+    list->SetComputeRootShaderResourceView(7, materials);
+    list->SetComputeRootShaderResourceView(8, emitters);
+    list->SetComputeRootShaderResourceView(9, emitterTriangles);
+    list->SetComputeRootDescriptorTable(10, heap_.At(uavTable_).gpu);
 }
 
 void Renderer::BeginFrame() {
@@ -231,37 +368,104 @@ void Renderer::RecordTrace(const RenderSnapshot& snapshot) {
 
         // Order this frame's UAV writes after the previous frame's dispatch and copies. Two frames
         // may be in flight; nothing else serializes their accesses to the output textures.
-        const D3D12_RESOURCE_BARRIER outputs[3] = {gfx::UavBarrier(display_.Get()), gfx::UavBarrier(linear_.Get()),
-                                                   gfx::UavBarrier(hitInfo_.Get())};
-        list_->ResourceBarrier(3, outputs);
+        const D3D12_RESOURCE_BARRIER outputs[5] = {gfx::UavBarrier(display_.Get()), gfx::UavBarrier(linear_.Get()),
+                                                   gfx::UavBarrier(hitInfo_.Get()), gfx::UavBarrier(accum_.Get()),
+                                                   gfx::UavBarrier(accumSq_.Get())};
+        list_->ResourceBarrier(static_cast<UINT>(std::size(outputs)), outputs);
 
-        const std::uint32_t tlasTimer = timers_.Begin(list_.Get(), "tlas_update");
-        sceneGpu_->UpdateInstances(*snapshot.scene, *frame.arena, list_.Get());
+        const std::uint32_t tlasTimer = timers_.Begin(list_.Get(), "scene_update");
+        sceneGpu_->UpdateFrame(*snapshot.scene, *frame.arena, list_.Get());
         timers_.End(list_.Get(), tlasTimer);
 
-        const gpu::FrameConstants constants = BuildFrameConstants(snapshot);
-        const gfx::UploadAllocation cb = frame.arena->Allocate(sizeof(constants));
-        std::memcpy(cb.cpu, &constants, sizeof(constants));
-
-        BindCommon(list_.Get(), cb.gpu, sceneGpu_->TlasAddress(), sceneGpu_->InstanceRecordsAddress(), sceneGpu_->MeshRecordsAddress(),
-                   sceneGpu_->PositionsAddress(), sceneGpu_->IndicesAddress());
-        list_->SetPipelineState(cameraView_->Get());
-
-        const std::uint32_t traceTimer = timers_.Begin(list_.Get(), "trace");
-        list_->Dispatch((width_ + 7) / 8, (height_ + 7) / 8, 1);
-        timers_.End(list_.Get(), traceTimer);
+        if (mode_ == RenderMode::Diagnostic) {
+            RecordDiagnostic(snapshot, *frame.arena);
+        } else {
+            RecordPathTrace(snapshot, *frame.arena);
+        }
     } catch (...) {
         AbandonFrame();
         throw;
     }
 }
 
-void Renderer::AbandonFrame() noexcept {
-    if (!frameOpen_) {
-        return;
+void Renderer::RecordDiagnostic(const RenderSnapshot& snapshot, gfx::UploadArena& arena) {
+    const gpu::FrameConstants constants = BuildFrameConstants(snapshot, 0, settings_.seed);
+    const gfx::UploadAllocation cb = arena.Allocate(sizeof(constants));
+    std::memcpy(cb.cpu, &constants, sizeof(constants));
+    gpu::IntegratorConstants ic{};
+    const gfx::UploadAllocation icb = arena.Allocate(sizeof(ic));
+    std::memcpy(icb.cpu, &ic, sizeof(ic));
+
+    BindCommon(list_.Get(), cb.gpu, icb.gpu, sceneGpu_->TlasAddress(), sceneGpu_->InstanceRecordsAddress(), sceneGpu_->MeshRecordsAddress(),
+               sceneGpu_->PositionsAddress(), sceneGpu_->IndicesAddress(), sceneGpu_->MaterialsAddress(), sceneGpu_->EmittersAddress(),
+               sceneGpu_->EmitterTrianglesAddress());
+    list_->SetPipelineState(cameraView_->Get());
+    const std::uint32_t traceTimer = timers_.Begin(list_.Get(), "trace");
+    list_->Dispatch((width_ + 7) / 8, (height_ + 7) / 8, 1);
+    timers_.End(list_.Get(), traceTimer);
+    lastDispatchCount_ = 1;
+}
+
+void Renderer::RecordPathTrace(const RenderSnapshot& snapshot, gfx::UploadArena& arena) {
+    const std::uint64_t key = AccumulationKey(snapshot);
+    if (key != accumulationKey_) {
+        accumulationKey_ = key;
+        sampleIndex_ = 0;
     }
-    frameOpen_ = false;
-    list_->Close();  // Nothing is submitted; the allocator is reset on the next BeginFrame.
+
+    std::uint32_t dispatches = 1;
+    std::uint32_t seedBase = settings_.seed;
+    if (mode_ == RenderMode::Raw) {
+        sampleIndex_ = 0;  // Raw mode shows the current sample only; the seed varies per frame.
+        seedBase = settings_.seed + snapshot.frameIndex * 7919u;
+    } else {
+        dispatches = std::max<std::uint32_t>(1, settings_.samplesPerFrame);
+        if (settings_.targetSamples != 0) {
+            if (sampleIndex_ >= settings_.targetSamples) {
+                dispatches = 0;
+            } else {
+                dispatches = std::min(dispatches, settings_.targetSamples - sampleIndex_);
+            }
+        }
+    }
+    lastDispatchCount_ = dispatches;
+    if (dispatches == 0) {
+        return;  // Reference target reached: keep the accumulated image as it is.
+    }
+
+    if (sampleIndex_ == 0) {
+        // Fresh accumulation: clear the invalid-value counters.
+        list_->CopyBufferRegion(statsBuffer_.Get(), 0, statsZero_.Get(), 0, gpu::kStatsCount * sizeof(std::uint32_t));
+        const D3D12_RESOURCE_BARRIER toUav = gfx::TransitionBarrier(statsBuffer_.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        list_->ResourceBarrier(1, &toUav);
+    }
+
+    const std::uint32_t traceTimer = timers_.Begin(list_.Get(), "path_trace");
+    for (std::uint32_t i = 0; i < dispatches; ++i) {
+        const gpu::FrameConstants constants = BuildFrameConstants(snapshot, sampleIndex_, seedBase);
+        const gfx::UploadAllocation cb = arena.Allocate(sizeof(constants));
+        std::memcpy(cb.cpu, &constants, sizeof(constants));
+
+        gpu::IntegratorConstants ic{};
+        ic.maxHits = settings_.maxHits;
+        ic.strategy = static_cast<std::uint32_t>(settings_.strategy);
+        ic.emitterCount = sceneGpu_->EmitterCount();
+        ic.flags = (sampleIndex_ == 0 ? gpu::kIntegratorFlagReset : 0u) | (settings_.jitter ? gpu::kIntegratorFlagJitter : 0u);
+        ic.exposure = settings_.exposure;
+        const gfx::UploadAllocation icb = arena.Allocate(sizeof(ic));
+        std::memcpy(icb.cpu, &ic, sizeof(ic));
+
+        BindCommon(list_.Get(), cb.gpu, icb.gpu, sceneGpu_->TlasAddress(), sceneGpu_->InstanceRecordsAddress(), sceneGpu_->MeshRecordsAddress(),
+                   sceneGpu_->PositionsAddress(), sceneGpu_->IndicesAddress(), sceneGpu_->MaterialsAddress(), sceneGpu_->EmittersAddress(),
+                   sceneGpu_->EmitterTrianglesAddress());
+        list_->SetPipelineState(pathTrace_->Get());
+        list_->Dispatch((width_ + 7) / 8, (height_ + 7) / 8, 1);
+        // Each dispatch reads the sums the previous one wrote.
+        const D3D12_RESOURCE_BARRIER all = gfx::UavBarrier(nullptr);
+        list_->ResourceBarrier(1, &all);
+        ++sampleIndex_;
+    }
+    timers_.End(list_.Get(), traceTimer);
 }
 
 void Renderer::RecordCopyToBackBuffer(ID3D12Resource* backBuffer, std::uint32_t backBufferWidth, std::uint32_t backBufferHeight) {
@@ -302,6 +506,14 @@ std::uint64_t Renderer::EndFrame() {
     return frame.fenceValue;
 }
 
+void Renderer::AbandonFrame() noexcept {
+    if (!frameOpen_) {
+        return;
+    }
+    frameOpen_ = false;
+    list_->Close();  // Nothing is submitted; the allocator is reset on the next BeginFrame.
+}
+
 void Renderer::CollectFinalTimings() {
     if (frameOpen_ || frameCounter_ == 0) {
         return;
@@ -319,15 +531,23 @@ CaptureImages Renderer::Readback() {
     LC_CHECK_HR(utilityAllocator_->Reset());
     LC_CHECK_HR(utilityList_->Reset(utilityAllocator_.Get(), nullptr));
 
+    const bool pathMode = mode_ != RenderMode::Diagnostic;
     const gfx::ReadbackPlan planDisplay = display_.PlanReadback(device_);
     const gfx::ReadbackPlan planLinear = linear_.PlanReadback(device_);
     const gfx::ReadbackPlan planHit = hitInfo_.PlanReadback(device_);
+    const gfx::ReadbackPlan planAccum = accum_.PlanReadback(device_);
     gfx::GpuBuffer rbDisplay = gfx::GpuBuffer::CreateReadback(device_, L"Readback Display", planDisplay.totalBytes);
     gfx::GpuBuffer rbLinear = gfx::GpuBuffer::CreateReadback(device_, L"Readback Linear", planLinear.totalBytes);
     gfx::GpuBuffer rbHit = gfx::GpuBuffer::CreateReadback(device_, L"Readback Hit Info", planHit.totalBytes);
+    gfx::GpuBuffer rbAccum = gfx::GpuBuffer::CreateReadback(device_, L"Readback Accum", planAccum.totalBytes);
+    gfx::GpuBuffer rbAccumSq = gfx::GpuBuffer::CreateReadback(device_, L"Readback Accum Sq", planAccum.totalBytes);
     display_.RecordCopyToReadback(utilityList_.Get(), rbDisplay, planDisplay);
     linear_.RecordCopyToReadback(utilityList_.Get(), rbLinear, planLinear);
     hitInfo_.RecordCopyToReadback(utilityList_.Get(), rbHit, planHit);
+    if (pathMode) {
+        accum_.RecordCopyToReadback(utilityList_.Get(), rbAccum, planAccum);
+        accumSq_.RecordCopyToReadback(utilityList_.Get(), rbAccumSq, planAccum);
+    }
     LC_CHECK_HR(utilityList_->Close());
     queue_.Execute(utilityList_.Get());
     queue_.WaitIdle();
@@ -335,48 +555,84 @@ CaptureImages Renderer::Readback() {
     CaptureImages out;
     out.width = width_;
     out.height = height_;
+    out.sampleCount = pathMode ? std::max<std::uint32_t>(1, sampleIndex_) : 1;
+    const std::size_t pixelCount = static_cast<std::size_t>(width_) * height_;
 
     out.display.width = width_;
     out.display.height = height_;
-    out.display.pixels.resize(static_cast<std::size_t>(width_) * height_ * 4);
-    {
-        const auto* src = static_cast<const std::uint8_t*>(rbDisplay.Map());
-        for (std::uint32_t y = 0; y < height_; ++y) {
-            std::memcpy(out.display.pixels.data() + static_cast<std::size_t>(y) * width_ * 4,
-                        src + planDisplay.footprint.Offset + static_cast<std::size_t>(y) * planDisplay.footprint.Footprint.RowPitch,
-                        static_cast<std::size_t>(width_) * 4);
-        }
-        rbDisplay.Unmap();
-    }
+    out.display.pixels.resize(pixelCount * 4);
+    CopyRows(rbDisplay, planDisplay, height_, static_cast<std::size_t>(width_) * 4, [&](std::uint32_t y, const std::uint8_t* row) {
+        std::memcpy(out.display.pixels.data() + static_cast<std::size_t>(y) * width_ * 4, row, static_cast<std::size_t>(width_) * 4);
+    });
 
     out.linear.width = width_;
     out.linear.height = height_;
-    out.linear.pixels.resize(static_cast<std::size_t>(width_) * height_ * 3);
-    {
-        const auto* src = static_cast<const std::uint8_t*>(rbLinear.Map());
-        for (std::uint32_t y = 0; y < height_; ++y) {
-            const auto* row = reinterpret_cast<const float*>(src + planLinear.footprint.Offset + static_cast<std::size_t>(y) * planLinear.footprint.Footprint.RowPitch);
-            float* dst = out.linear.pixels.data() + static_cast<std::size_t>(y) * width_ * 3;
-            for (std::uint32_t x = 0; x < width_; ++x) {
-                dst[x * 3 + 0] = row[x * 4 + 0];
-                dst[x * 3 + 1] = row[x * 4 + 1];
-                dst[x * 3 + 2] = row[x * 4 + 2];
+    out.linear.pixels.resize(pixelCount * 3);
+    CopyRows(rbLinear, planLinear, height_, static_cast<std::size_t>(width_) * 16, [&](std::uint32_t y, const std::uint8_t* rowBytes) {
+        const auto* row = reinterpret_cast<const float*>(rowBytes);
+        float* dst = out.linear.pixels.data() + static_cast<std::size_t>(y) * width_ * 3;
+        for (std::uint32_t x = 0; x < width_; ++x) {
+            dst[x * 3 + 0] = row[x * 4 + 0];
+            dst[x * 3 + 1] = row[x * 4 + 1];
+            dst[x * 3 + 2] = row[x * 4 + 2];
+        }
+    });
+
+    out.hitInfo.resize(pixelCount);
+    CopyRows(rbHit, planHit, height_, static_cast<std::size_t>(width_) * 16, [&](std::uint32_t y, const std::uint8_t* row) {
+        std::memcpy(out.hitInfo.data() + static_cast<std::size_t>(y) * width_, row, static_cast<std::size_t>(width_) * sizeof(gpu::HitInfoTexel));
+    });
+
+    out.standardError.width = width_;
+    out.standardError.height = height_;
+    out.standardError.pixels.assign(pixelCount * 3, 0.0f);
+    if (pathMode) {
+        std::vector<float> sums(pixelCount * 4);
+        std::vector<float> sumsSq(pixelCount * 4);
+        CopyRows(rbAccum, planAccum, height_, static_cast<std::size_t>(width_) * 16, [&](std::uint32_t y, const std::uint8_t* row) {
+            std::memcpy(sums.data() + static_cast<std::size_t>(y) * width_ * 4, row, static_cast<std::size_t>(width_) * 16);
+        });
+        CopyRows(rbAccumSq, planAccum, height_, static_cast<std::size_t>(width_) * 16, [&](std::uint32_t y, const std::uint8_t* row) {
+            std::memcpy(sumsSq.data() + static_cast<std::size_t>(y) * width_ * 4, row, static_cast<std::size_t>(width_) * 16);
+        });
+        for (std::size_t i = 0; i < pixelCount; ++i) {
+            const double n = sums[i * 4 + 3];
+            for (int c = 0; c < 3; ++c) {
+                const double sum = sums[i * 4 + c];
+                const double sq = sumsSq[i * 4 + c];
+                const double mean = n > 0 ? sum / n : 0.0;
+                out.linear.pixels[i * 3 + c] = static_cast<float>(mean);  // Exact mean from the sums.
+                if (n >= 2) {
+                    const double variance = std::max(0.0, (sq / n - mean * mean) * n / (n - 1.0));
+                    out.standardError.pixels[i * 3 + c] = static_cast<float>(std::sqrt(variance / n));
+                }
             }
         }
-        rbLinear.Unmap();
-    }
-
-    out.hitInfo.resize(static_cast<std::size_t>(width_) * height_);
-    {
-        const auto* src = static_cast<const std::uint8_t*>(rbHit.Map());
-        for (std::uint32_t y = 0; y < height_; ++y) {
-            std::memcpy(out.hitInfo.data() + static_cast<std::size_t>(y) * width_,
-                        src + planHit.footprint.Offset + static_cast<std::size_t>(y) * planHit.footprint.Footprint.RowPitch,
-                        static_cast<std::size_t>(width_) * sizeof(gpu::HitInfoTexel));
-        }
-        rbHit.Unmap();
     }
     return out;
+}
+
+StatsCounters Renderer::ReadStats() {
+    if (frameOpen_) {
+        throw Error("Renderer::ReadStats called while a frame is being recorded");
+    }
+    queue_.WaitIdle();
+    gfx::GpuBuffer readback = gfx::GpuBuffer::CreateReadback(device_, L"Stats Readback", statsBuffer_.Size());
+    LC_CHECK_HR(utilityAllocator_->Reset());
+    LC_CHECK_HR(utilityList_->Reset(utilityAllocator_.Get(), nullptr));
+    utilityList_->CopyResource(readback.Get(), statsBuffer_.Get());  // COMMON -> COPY_SOURCE by promotion.
+    LC_CHECK_HR(utilityList_->Close());
+    queue_.Execute(utilityList_.Get());
+    queue_.WaitIdle();
+    std::uint32_t values[gpu::kStatsCount] = {};
+    std::memcpy(values, readback.Map(), sizeof(values));
+    readback.Unmap();
+    StatsCounters s;
+    s.nan = values[gpu::kStatsNan];
+    s.inf = values[gpu::kStatsInf];
+    s.negative = values[gpu::kStatsNegative];
+    s.zeroPdf = values[gpu::kStatsZeroPdf];
+    return s;
 }
 
 std::vector<LayoutProbeEntry> Renderer::RunLayoutProbe() {
@@ -421,13 +677,14 @@ std::vector<LayoutProbeEntry> Renderer::RunLayoutProbe() {
     instances[1].meshIndex = 5;
     instances[1].materialIndex = 6;
     instances[1].stableId = 77;
-    instances[1].transformRevision = 9;
+    instances[1].emitterIndex = 9;
 
     gpu::MeshRecord meshes[2]{};
     meshes[1] = {11, 22, 33, 44};
 
     math::Vec3 positions[3] = {{0, 0, 0}, {1, 1, 1}, {7.0f, 8.5f, 9.0f}};
     std::uint32_t indices[5] = {0, 1, 2, 3, 0xABCD};
+    gpu::IntegratorConstants ic{};
 
     gfx::UploadArena arena(device_, 64 * 1024, L"Layout Probe Arena");
     auto upload = [&arena](std::span<const std::uint8_t> bytes) {
@@ -436,6 +693,7 @@ std::vector<LayoutProbeEntry> Renderer::RunLayoutProbe() {
         return a.gpu;
     };
     const D3D12_GPU_VIRTUAL_ADDRESS cbVa = upload(AsBytes(c));
+    const D3D12_GPU_VIRTUAL_ADDRESS icVa = upload(AsBytes(ic));
     const D3D12_GPU_VIRTUAL_ADDRESS instVa = upload(AsBytes(instances));
     const D3D12_GPU_VIRTUAL_ADDRESS meshVa = upload(AsBytes(meshes));
     const D3D12_GPU_VIRTUAL_ADDRESS posVa = upload(AsBytes(positions));
@@ -445,8 +703,8 @@ std::vector<LayoutProbeEntry> Renderer::RunLayoutProbe() {
 
     LC_CHECK_HR(utilityAllocator_->Reset());
     LC_CHECK_HR(utilityList_->Reset(utilityAllocator_.Get(), nullptr));
-    // t0 (TLAS) is not read by the probe shader; bind a valid buffer address so every root parameter is set.
-    BindCommon(utilityList_.Get(), cbVa, instVa, instVa, meshVa, posVa, idxVa);
+    // Unused root SRVs (TLAS, materials, emitters) get a valid buffer address so every parameter is set.
+    BindCommon(utilityList_.Get(), cbVa, icVa, instVa, instVa, meshVa, posVa, idxVa, instVa, instVa, instVa);
     utilityList_->SetPipelineState(layoutProbe_->Get());
     utilityList_->Dispatch(1, 1, 1);
     const D3D12_RESOURCE_BARRIER toCopy = gfx::TransitionBarrier(probeBuffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -483,7 +741,7 @@ std::vector<LayoutProbeEntry> Renderer::RunLayoutProbe() {
         {"instances[1].meshIndex", instances[1].meshIndex},
         {"instances[1].materialIndex", instances[1].materialIndex},
         {"instances[1].stableId", instances[1].stableId},
-        {"instances[1].transformRevision", instances[1].transformRevision},
+        {"instances[1].emitterIndex", instances[1].emitterIndex},
         {"meshes[1].firstVertex", meshes[1].firstVertex},
         {"meshes[1].firstIndex", meshes[1].firstIndex},
         {"meshes[1].vertexCount", meshes[1].vertexCount},

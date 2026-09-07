@@ -13,6 +13,9 @@ namespace lc {
 struct CaptureMetadata {
     std::string scene;
     std::string view;
+    std::string mode = "diag";
+    std::string strategy = "n/a";
+    std::uint32_t emitterCount = 0;
     std::uint32_t frameIndex = 0;
     std::uint32_t sampleIndex = 0;
     std::uint32_t seed = 0;

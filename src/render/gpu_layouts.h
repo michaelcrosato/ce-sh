@@ -48,6 +48,25 @@ static_assert(offsetof(FrameConstants, frameIndex) == 224);
 static_assert(offsetof(FrameConstants, rayTMin) == 240);
 static_assert(offsetof(FrameConstants, seed) == 252);
 
+// Root constant buffer b1 for the path tracer.
+struct alignas(16) IntegratorConstants {
+    std::uint32_t maxHits = 4;
+    std::uint32_t strategy = 0;
+    std::uint32_t emitterCount = 0;
+    std::uint32_t flags = 0;
+    float exposure = 1.0f;
+    float pad0 = 0.0f;
+    float pad1 = 0.0f;
+    float pad2 = 0.0f;
+};
+static_assert(sizeof(IntegratorConstants) == 32, "IntegratorConstants must match layouts.hlsli");
+
+inline constexpr std::uint32_t kStrategyMis = 0;
+inline constexpr std::uint32_t kStrategyLight = 1;
+inline constexpr std::uint32_t kStrategyBsdf = 2;
+inline constexpr std::uint32_t kIntegratorFlagReset = 1u;
+inline constexpr std::uint32_t kIntegratorFlagJitter = 2u;
+
 // StructuredBuffer t1, one per TLAS instance (same order as the instance descriptors).
 struct InstanceRecord {
     Float4 objectToWorldRow[3];
@@ -55,7 +74,7 @@ struct InstanceRecord {
     std::uint32_t meshIndex = 0;
     std::uint32_t materialIndex = 0;
     std::uint32_t stableId = 0;
-    std::uint32_t transformRevision = 0;
+    std::uint32_t emitterIndex = 0xFFFFFFFFu;
 };
 static_assert(sizeof(InstanceRecord) == 112, "InstanceRecord must match layouts.hlsli");
 static_assert(offsetof(InstanceRecord, prevObjectToWorldRow) == 48);
@@ -70,12 +89,55 @@ struct MeshRecord {
 };
 static_assert(sizeof(MeshRecord) == 16, "MeshRecord must match layouts.hlsli");
 
-// RWTexture2D<uint4> u2 texel written by camera_view.hlsl.
+// StructuredBuffer t5, one per scene material.
+struct MaterialRecord {
+    std::uint32_t type = 0;
+    std::uint32_t flags = 0;
+    float pad0 = 0.0f;
+    float pad1 = 0.0f;
+    float reflectance[3] = {};
+    float pad2 = 0.0f;
+    float radiance[3] = {};
+    float pad3 = 0.0f;
+};
+static_assert(sizeof(MaterialRecord) == 48, "MaterialRecord must match layouts.hlsli");
+static_assert(offsetof(MaterialRecord, reflectance) == 16);
+static_assert(offsetof(MaterialRecord, radiance) == 32);
+
+inline constexpr std::uint32_t kMaterialFlagEmitterOn = 1u;
+inline constexpr std::uint32_t kNoEmitter = 0xFFFFFFFFu;
+
+// StructuredBuffer t7, one per emitting triangle.
+struct EmitterTriangle {
+    std::uint32_t instanceIndex = 0;
+    std::uint32_t primitiveIndex = 0;
+    float area = 0.0f;
+    float cdf = 0.0f;
+};
+static_assert(sizeof(EmitterTriangle) == 16, "EmitterTriangle must match layouts.hlsli");
+
+// StructuredBuffer t6, one per active emitter.
+struct EmitterRecord {
+    std::uint32_t instanceIndex = 0;
+    std::uint32_t firstTriangle = 0;
+    std::uint32_t triangleCount = 0;
+    std::uint32_t materialIndex = 0;
+    float area = 0.0f;
+    float selectionPdf = 0.0f;
+    float selectionCdf = 0.0f;
+    float pad = 0.0f;
+    float radiance[3] = {};
+    float pad2 = 0.0f;
+};
+static_assert(sizeof(EmitterRecord) == 48, "EmitterRecord must match layouts.hlsli");
+static_assert(offsetof(EmitterRecord, radiance) == 32);
+
+// RWTexture2D<uint4> u2 texel written by camera_view.hlsl and path_trace.hlsl.
 struct HitInfoTexel {
     std::uint32_t stableId = 0;        // kMissId when the ray left the scene.
     std::uint32_t primitiveIndex = 0;
     std::uint32_t flags = 0;           // kHitFlag*.
-    std::uint32_t instanceIndex = 0;
+    std::uint32_t instanceIndex = 0;   // camera_view: instance index; path_trace: mirror bounces before the surface.
 };
 static_assert(sizeof(HitInfoTexel) == 16);
 
@@ -83,6 +145,13 @@ inline constexpr std::uint32_t kMissId = 0xFFFFFFFFu;
 inline constexpr std::uint32_t kHitFlagFrontFace = 1u;
 inline constexpr std::uint32_t kHitFlagGeometricFacing = 2u;
 inline constexpr std::uint32_t kHitFlagGrazing = 4u;
+
+// Stats buffer (RWStructuredBuffer<uint> u6).
+inline constexpr std::uint32_t kStatsNan = 0;
+inline constexpr std::uint32_t kStatsInf = 1;
+inline constexpr std::uint32_t kStatsNegative = 2;
+inline constexpr std::uint32_t kStatsZeroPdf = 3;
+inline constexpr std::uint32_t kStatsCount = 8;
 
 // layout_probe.hlsl output size and trailing sentinel.
 inline constexpr std::uint32_t kLayoutProbeCount = 30;

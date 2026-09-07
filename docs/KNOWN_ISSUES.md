@@ -35,6 +35,35 @@ NOT RUN this session). Verification: run under Visual Studio once per milestone 
 All GPU evidence comes from one NVIDIA GeForce RTX 4070 SUPER with driver 32.0.16.1047. Other RTX
 models and vendors are untested (spec §3). Verification: run the GPU test label on a second machine.
 
+## KI-008 — low — all builds — no tone mapping
+
+The display transform is `sRGB(saturate(radiance * exposure))`. Radiance above `1 / exposure`
+clips (visible on emitter surfaces, which show as white). Correctness tests read the linear
+radiance, which is unaffected. Verification: a documented tone curve with M4/M5 and a test that
+the raw radiance is unchanged by it.
+
+## KI-009 — info — all builds — BSDF-only estimator covers a shorter path family at equal hits
+
+By construction (RENDERING.md, "Path families"). The comparison test compensates with one extra
+hit; the production integrator (MIS) is unaffected.
+
+## KI-010 — info — all builds — float32 accumulation
+
+Sums and sums of squares are float32; at a few thousand samples the relative precision loss is
+below 1e-4 for the radiance levels in the test scenes. Verification: switch to float64 or
+compensated sums if reference runs beyond ~16k spp are needed.
+
+## KI-011 — low — windowed builds — rendering pauses during a caption drag
+
+The Win32 modal size/move loop blocks the frame loop until the drag ends; the last frame stays on
+screen and the swap chain resizes on release. No corruption. Verification: a timer-driven render
+inside `WM_ENTERSIZEMOVE` if live resize is wanted.
+
+## KI-012 — info — all builds — raw mode is noisy by design
+
+One path sample per pixel per frame with no temporal filtering (spec §13 raw mode). Real-time
+reconstruction is M4.
+
 ## KI-007 — info — all builds — reliability loop not run
 
 The 30-minute reliability loop, repeated reload/resize/focus sequences beyond the resize test, and

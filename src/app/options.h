@@ -11,11 +11,22 @@
 
 namespace lc {
 
+enum class AppRenderMode { Diagnostic, Raw, Reference };
+enum class AppStrategy { Mis, Light, Bsdf };
+
 struct AppOptions {
     std::string scene = "rt_triangle";
     std::uint32_t width = 1280;
     std::uint32_t height = 720;
     ViewMode view = ViewMode::Normals;
+    AppRenderMode mode = AppRenderMode::Raw;
+    AppStrategy strategy = AppStrategy::Mis;
+    std::uint32_t spp = 256;            // Reference mode target samples per pixel.
+    std::uint32_t maxHits = 4;
+    std::uint32_t samplesPerFrame = 4;  // Reference mode dispatches per frame.
+    float exposure = 1.0f;
+    std::uint32_t seed = 0;
+    bool jitter = true;
     bool headless = false;
     bool validate = false;
     bool resizeTest = false;
@@ -24,9 +35,10 @@ struct AppOptions {
     bool gpuValidation = false;
     bool vsync = true;
     int adapterIndex = -1;        // -1 selects the first adapter that supports hardware ray tracing.
-    std::uint32_t frames = 0;     // 0 = run until the window closes.
+    std::uint32_t frames = 0;     // 0 = run until the window closes (or the reference target is reached).
     float horizontalFovDegrees = 90.0f;
     std::optional<std::filesystem::path> capture;
+    std::optional<std::filesystem::path> stats;
     std::optional<std::filesystem::path> envReport;
     std::optional<std::filesystem::path> logFile;
     bool help = false;

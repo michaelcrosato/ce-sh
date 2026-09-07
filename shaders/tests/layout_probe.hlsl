@@ -38,7 +38,7 @@ void main() {
     gProbe[i++] = gInstances[1].meshIndex;
     gProbe[i++] = gInstances[1].materialIndex;
     gProbe[i++] = gInstances[1].stableId;
-    gProbe[i++] = gInstances[1].transformRevision;
+    gProbe[i++] = gInstances[1].emitterIndex;
     gProbe[i++] = gMeshes[1].firstVertex;
     gProbe[i++] = gMeshes[1].firstIndex;
     gProbe[i++] = gMeshes[1].vertexCount;

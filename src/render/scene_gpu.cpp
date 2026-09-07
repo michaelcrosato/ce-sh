@@ -17,6 +17,11 @@ std::span<const std::uint8_t> AsBytes(const std::vector<T>& v) {
     return {reinterpret_cast<const std::uint8_t*>(v.data()), v.size() * sizeof(T)};
 }
 
+std::uint64_t HashCombine(std::uint64_t h, std::uint64_t v) {
+    h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+    return h;
+}
+
 }  // namespace
 
 SceneGpu::SceneGpu(gfx::Device& device, gfx::GraphicsQueue& queue, const Scene& scene) {
@@ -43,6 +48,7 @@ SceneGpu::SceneGpu(gfx::Device& device, gfx::GraphicsQueue& queue, const Scene& 
     positions_ = gfx::GpuBuffer::CreateDefault(device, L"Scene Positions", positions.size() * sizeof(math::Vec3));
     indices_ = gfx::GpuBuffer::CreateDefault(device, L"Scene Indices", indices.size() * sizeof(std::uint32_t));
     meshRecords_ = gfx::GpuBuffer::CreateDefault(device, L"Scene Mesh Records", records.size() * sizeof(gpu::MeshRecord));
+    placeholder_ = gfx::GpuBuffer::CreateDefault(device, L"Scene Empty Table Placeholder", 256);
 
     gfx::ComPtr<ID3D12CommandAllocator> allocator;
     LC_CHECK_HR(device.Get()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)));
@@ -55,6 +61,10 @@ SceneGpu::SceneGpu(gfx::Device& device, gfx::GraphicsQueue& queue, const Scene& 
     staging.push_back(gfx::UploadToDefaultBuffer(device, list.Get(), positions_, AsBytes(positions), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
     staging.push_back(gfx::UploadToDefaultBuffer(device, list.Get(), indices_, AsBytes(indices), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
     staging.push_back(gfx::UploadToDefaultBuffer(device, list.Get(), meshRecords_, AsBytes(records), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+    {
+        const std::vector<std::uint8_t> zeros(256, 0);
+        staging.push_back(gfx::UploadToDefaultBuffer(device, list.Get(), placeholder_, zeros, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+    }
 
     blas_.resize(scene.Meshes().size());
     uploadedMeshCount_ = static_cast<std::uint32_t>(scene.Meshes().size());
@@ -76,9 +86,9 @@ SceneGpu::SceneGpu(gfx::Device& device, gfx::GraphicsQueue& queue, const Scene& 
         b.ReleaseScratch();
     }
     triangleCount_ = scene.TotalTriangles();
-    log::Info("Scene uploaded: {} meshes, {} vertices, {} triangles (unique), {} instances, {} triangle instances, AS {} KiB",
+    log::Info("Scene uploaded: {} meshes, {} vertices, {} triangles (unique), {} instances, {} triangle instances, {} materials, AS {} KiB",
               scene.Meshes().size(), positions.size(), indices.size() / 3, scene.Instances().size(), triangleCount_,
-              AccelerationStructureBytes() / 1024);
+              scene.Materials().size(), AccelerationStructureBytes() / 1024);
 }
 
 std::uint64_t SceneGpu::AccelerationStructureBytes() const {
@@ -89,7 +99,7 @@ std::uint64_t SceneGpu::AccelerationStructureBytes() const {
     return total;
 }
 
-void SceneGpu::UpdateInstances(const Scene& scene, gfx::UploadArena& arena, ID3D12GraphicsCommandList4* list) {
+void SceneGpu::UpdateFrame(const Scene& scene, gfx::UploadArena& arena, ID3D12GraphicsCommandList4* list) {
     const std::vector<Instance>& instances = scene.Instances();
     const auto count = static_cast<std::uint32_t>(instances.size());
     if (count == 0) {
@@ -106,8 +116,71 @@ void SceneGpu::UpdateInstances(const Scene& scene, gfx::UploadArena& arena, ID3D
     }
 
     bool dirty = !tlasValid_ || lastRevisions_.size() != instances.size();
-    for (std::size_t i = 0; !dirty && i < instances.size(); ++i) {
-        dirty = instances[i].transformRevision != lastRevisions_[i];
+    std::uint64_t hash = HashCombine(0x1234567ull, count);
+    hash = HashCombine(hash, scene.MaterialRevision());
+    for (std::size_t i = 0; i < instances.size(); ++i) {
+        if (!dirty && instances[i].transformRevision != lastRevisions_[i]) {
+            dirty = true;
+        }
+        hash = HashCombine(hash, instances[i].transformRevision);
+    }
+    sceneRevisionHash_ = hash;
+
+    // Materials (small; rewritten every frame so emitter on/off changes apply immediately).
+    {
+        const std::vector<Material>& materials = scene.Materials();
+        const gfx::UploadAllocation alloc = arena.Allocate(materials.size() * sizeof(gpu::MaterialRecord));
+        auto* records = static_cast<gpu::MaterialRecord*>(alloc.cpu);
+        for (std::size_t i = 0; i < materials.size(); ++i) {
+            const Material& m = materials[i];
+            gpu::MaterialRecord& r = records[i];
+            r = gpu::MaterialRecord{};
+            r.type = static_cast<std::uint32_t>(m.type);
+            r.flags = m.IsActiveEmitter() ? gpu::kMaterialFlagEmitterOn : 0u;
+            r.reflectance[0] = m.reflectance.x;
+            r.reflectance[1] = m.reflectance.y;
+            r.reflectance[2] = m.reflectance.z;
+            r.radiance[0] = m.radiance.x;
+            r.radiance[1] = m.radiance.y;
+            r.radiance[2] = m.radiance.z;
+        }
+        materialsAddress_ = alloc.gpu;
+    }
+
+    // Emitters: derived from the same instances and triangles that are visible.
+    const EmitterTable table = BuildEmitterTable(scene);
+    std::vector<std::uint32_t> emitterOfInstance(count, gpu::kNoEmitter);
+    emitterCount_ = static_cast<std::uint32_t>(table.emitters.size());
+    if (!table.emitters.empty()) {
+        const gfx::UploadAllocation eAlloc = arena.Allocate(table.emitters.size() * sizeof(gpu::EmitterRecord));
+        auto* eRecords = static_cast<gpu::EmitterRecord*>(eAlloc.cpu);
+        for (std::size_t i = 0; i < table.emitters.size(); ++i) {
+            const EmitterCpu& e = table.emitters[i];
+            gpu::EmitterRecord& r = eRecords[i];
+            r = gpu::EmitterRecord{};
+            r.instanceIndex = e.instanceIndex;
+            r.firstTriangle = e.firstTriangle;
+            r.triangleCount = e.triangleCount;
+            r.materialIndex = e.materialIndex;
+            r.area = e.area;
+            r.selectionPdf = e.selectionPdf;
+            r.selectionCdf = e.selectionCdf;
+            r.radiance[0] = e.radiance.x;
+            r.radiance[1] = e.radiance.y;
+            r.radiance[2] = e.radiance.z;
+            emitterOfInstance[e.instanceIndex] = static_cast<std::uint32_t>(i);
+        }
+        emittersAddress_ = eAlloc.gpu;
+        const gfx::UploadAllocation tAlloc = arena.Allocate(table.triangles.size() * sizeof(gpu::EmitterTriangle));
+        auto* tRecords = static_cast<gpu::EmitterTriangle*>(tAlloc.cpu);
+        for (std::size_t i = 0; i < table.triangles.size(); ++i) {
+            const EmitterTriangleCpu& t = table.triangles[i];
+            tRecords[i] = gpu::EmitterTriangle{t.instanceIndex, t.primitiveIndex, t.area, t.cdf};
+        }
+        emitterTrianglesAddress_ = tAlloc.gpu;
+    } else {
+        emittersAddress_ = placeholder_.Address();
+        emitterTrianglesAddress_ = placeholder_.Address();
     }
 
     // Instance records: rewritten every frame (previous transforms change after every commit).
@@ -123,7 +196,7 @@ void SceneGpu::UpdateInstances(const Scene& scene, gfx::UploadArena& arena, ID3D
         r.meshIndex = scene.MeshIndex(inst.mesh);
         r.materialIndex = inst.materialIndex;
         r.stableId = inst.id.value;
-        r.transformRevision = inst.transformRevision;
+        r.emitterIndex = emitterOfInstance[i];
     }
     instanceRecordsAddress_ = recordAlloc.gpu;
     instanceCount_ = count;

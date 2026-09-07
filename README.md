@@ -9,10 +9,12 @@ instructions for coding agents are in [`AGENTS.md`](AGENTS.md).
 
 ## Status
 
-Milestones M0 (environment and build) and M1 (hardware geometry) are complete on the recorded
-machine: a real ray-traced camera pass runs on an RTX 4070 SUPER with validated hit identifiers,
-a GPU layout probe, diagnostic views, captures, GPU timing, and a resize test. Lighting (M2) is
-next. Details, evidence labels, and the next task: [`docs/STATUS.md`](docs/STATUS.md).
+Milestones M0 (environment and build), M1 (hardware geometry), and M2 (raw light transport) are
+complete on the recorded machine: an RTX 4070 SUPER runs a small path tracer with next-event
+estimation, multiple importance sampling, one-sided area emitters, and ideal mirrors, checked
+against closed-form irradiance, sealed-room zero tests, estimator cross-agreement, and mirror
+identity tests. The moving two-room scene (M3) is next. Details, evidence labels, and the next
+task: [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Quick start
 
@@ -21,7 +23,8 @@ next. Details, evidence labels, and the next task: [`docs/STATUS.md`](docs/STATU
 cmake --preset windows-debug
 cmake --build --preset windows-debug
 ctest --preset windows-debug --output-on-failure
-.\build\windows-debug\bin\LastCircuit.exe --scene rt_boxes
+.\build\windows-debug\bin\LastCircuit.exe --scene t08_box --mode reference     # path-traced Cornell-style box
+.\build\windows-debug\bin\LastCircuit.exe --scene rt_boxes --mode diag         # M1 diagnostic normals view
 ```
 
 Requirements: Windows 11, Visual Studio 2026 with the C++ workload (Windows SDK 10.0.26100), and

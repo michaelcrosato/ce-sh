@@ -1,9 +1,8 @@
 # Rendering
 
-State at milestone M1: hardware camera rays and diagnostic views only. There is no lighting yet,
-so the sections the spec requires for the integrator (materials, source units, sampling
-equations, MIS weights, buffer contracts for denoising, history policy) are marked **not
-implemented** below and will be written with M2.
+State at milestone M2: hardware camera rays with diagnostic views (M1) and a small RGB path tracer
+with raw and progressive-reference modes (M2). Everything below exists in the code and is exercised
+by the tests in `docs/TESTS.md`. Sections marked **not implemented** are future work.
 
 ## Coordinate and matrix contract
 
@@ -12,17 +11,20 @@ implemented** below and will be written with M2.
   right and +Y up.
 - Column vectors: `world = objectToWorld * local`. A product `A * B` applies `B` first.
 - Storage: row-major, `m[row][col]`, on the CPU (`lc::math::Mat4`) and in shader memory
-  (`#pragma pack_matrix(row_major)` at the top of `shaders/shared/layouts.hlsli`). HLSL indexing
-  `M[row][col]` and `mul(M, v)` therefore mean the same as the CPU code. The GPU layout probe
-  (`--validate`) confirms element order, offsets, and array packing on the real device.
+  (`#pragma pack_matrix(row_major)` in `shaders/shared/layouts.hlsli`, and `-Zpr` on every DXC
+  command line so no shader can silently get another packing). HLSL indexing `M[row][col]` and
+  `mul(M, v)` therefore mean the same as the CPU code. The GPU layout probe (`--validate`)
+  confirms element order, offsets, and array packing on the real device.
 - Translation lives in column 3. D3D12 instance transforms (`float Transform[3][4]`) are the first
-  three rows of `objectToWorld`, copied element for element.
+  three rows of `objectToWorld`, copied element for element. Instance transforms must have a
+  positive determinant and uniform scale (rejected otherwise, spec §11).
 - Triangles are counter-clockwise when seen from outside; the geometric normal is
   `normalize(cross(p1 - p0, p2 - p0))` computed from world-space vertices.
 - Facing: DXR reports a triangle as front-facing when `dot(cross(p1 - p0, p2 - p0), rayDirection) < 0`.
   That matches the counter-clockwise rule directly, so instances use
-  `D3D12_RAYTRACING_INSTANCE_FLAG_NONE`. The `facing` view and the validation mode check that the
-  RayQuery flag and the geometric normal agree on every hit pixel (0 mismatches required).
+  `D3D12_RAYTRACING_INSTANCE_FLAG_NONE`. The `facing` view and the diagnostic validation check that
+  the RayQuery flag and the geometric normal agree on every hit pixel (grazing hits with
+  `|cos| < 1e-3` are reported separately because facing is ill-defined there).
 
 ## Camera
 
@@ -30,15 +32,16 @@ implemented** below and will be written with M2.
   `2 * atan(tan(hfov / 2) / aspect)` with `aspect = width / height`.
 - Camera-to-world: `Translation(position) * RotationY(yaw) * RotationX(pitch)`; positive yaw turns
   toward -X, positive pitch looks up.
-- Camera ray through pixel `(x, y)` with the pixel centre at `+0.5`:
-  `uv = (pixel + 0.5) / renderSize`, `ndc = (2u - 1, 1 - 2v)`,
+- Camera ray through pixel `(x, y)` with sub-pixel offset `j` (`0.5` for the diagnostic pass, a
+  uniform jitter in `[0, 1)` for the path tracer unless `--no-jitter`):
+  `uv = (pixel + j) / renderSize`, `ndc = (2u - 1, 1 - 2v)`,
   `dirView = (ndc.x * tanHalfFovY * aspect, ndc.y * tanHalfFovY, -1)`,
   `dirWorld = normalize(viewToWorld3x3 * dirView)`. The same formula exists on the CPU as
-  `Camera::RayDirection` and is used by the tests that check hit expectations.
-- Projection (`viewToClip`, present in the constants for later passes, unused by M1 shaders):
-  right-handed, D3D clip depth in [0, 1], near plane maps to 0, far plane to 1
+  `Camera::RayDirection`; `Camera::ProjectToImage` is its inverse and places test patches.
+- Projection (`viewToClip`, present in the constants for later passes, unused by the current
+  shaders): right-handed, D3D clip depth in [0, 1], near plane maps to 0, far plane to 1
   (`m22 = far / (near - far)`, `m23 = near * far / (near - far)`, `m32 = -1`). Near 0.05 m, far 200 m.
-- Camera rays use `tMin = 0` and `tMax = far`.
+- Camera rays use `tMin = 0` and `tMax = far`. Environment radiance is black.
 
 ## Ray interface
 
@@ -50,57 +53,172 @@ implemented** below and will be written with M2.
   first-hit shortcut.
 - `TraceVisibility(scene, origin, direction, tMin, tMax)`: adds
   `RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH`; returns true when the finite segment is unoccluded.
-  (Written, not yet exercised by a pass: source visibility arrives with M2.)
 
-All geometry is opaque triangles in one TLAS; every ray type will use this same structure.
+All geometry is opaque triangles in one TLAS; camera, continuation, and shadow rays traverse it.
 
-## Hit identifiers
+## Materials (spec §7)
 
-- `InstanceID` in the TLAS instance descriptor is the scene's stable instance id (starts at 1,
-  never reused, 24-bit). `InstanceRecord[instanceIndex].stableId` carries the same value so the
-  two can be cross-checked.
-- `camera_view.hlsl` writes a hit-info texel per pixel: `x` = stable id or `0xFFFFFFFF` on a miss,
-  `y` = primitive index, `z` = flags (bit 0 RayQuery front face, bit 1 geometric normal faces the
-  ray), `w` = instance index.
+Explicit types, validated at `Scene::AddMaterial`:
 
-## Diagnostic views (M1)
-
-These are diagnostic colours, identified as such in the window title, the log, and capture
-metadata (`"diagnosticView": true`). They are not lighting and never enter a production image.
-
-| `--view` | Meaning | Miss colour |
+| Type | Parameters and ranges | Behaviour |
 |---|---|---|
-| `normals` | world-space geometric normal * 0.5 + 0.5 | black |
-| `ids` | hash colour of the stable instance id | black |
-| `depth` | hit distance, 0 m black to 20 m white | black |
-| `bary` | barycentric weights (w0, w1, w2) as RGB | black |
-| `facing` | green = front face, red = back face, magenta = RayQuery facing and winding disagree | black |
-| `prims` | hash colour of primitive index and instance id | black |
+| `Diffuse` | `reflectance` in [0, 1] per channel | Lambertian, `f = reflectance / pi`, two-sided (the shading normal is the geometric normal flipped toward the incoming ray) |
+| `Mirror` | `reflectance` in [0, 1] per channel (1 allowed for test mirrors) | Ideal specular reflection; delta event, no next-event estimation at this vertex |
+| `Emitter` | `radiance` >= 0 per channel, `reflectance` in [0, 1], `emitterOn` | Emits `radiance` from the front (winding) side only; the surface reflects diffusely with `reflectance` (so an off source, or its back, stays in the scene) |
 
-## Shared GPU records
+No normal maps; the geometric normal is used everywhere. No energy gain is possible: reflectance
+is bounded by 1 and the BSDF sampling weight equals the reflectance.
 
-`FrameConstants` (256 bytes, root CBV b0), `InstanceRecord` (112 bytes, `StructuredBuffer` t1,
-one per TLAS instance in TLAS order), `MeshRecord` (16 bytes, t2), positions (`StructuredBuffer<float3>`
-t3, all meshes concatenated), indices (`StructuredBuffer<uint>` t4). Matrices in structured
-buffers are stored as three explicit `float4` rows to avoid any packing ambiguity. Root parameter
-6 is a UAV table: u0 display (R8G8B8A8_UNORM), u1 linear (R32G32B32A32_FLOAT), u2 hit info
-(R32G32B32A32_UINT), u3 layout-probe output.
+**Radiance convention:** scene-linear RGB, unitless. An emitter of radiance `L` that covers a
+receiver's whole hemisphere produces irradiance `pi * L`. No watts or lumens are claimed; the
+value is the one "radiance scale" the spec asks for.
+
+## Emitters and their sampling distribution
+
+An emitter is an instance whose material is an active `Emitter`. `BuildEmitterTable` (CPU, every
+frame) derives the sampling data from the same triangles that are visible, transformed by the same
+instance transform:
+
+- per triangle: world-space area `A_t` and a cumulative area fraction within its emitter;
+- per emitter: total area `A_e`, radiance `L_e`, power `P_e = luminance(L_e) * A_e`, exact
+  selection probability `p_e = P_e / sum(P)` (every active emitter has `p_e > 0`), and a cumulative
+  selection probability.
+
+Sampling a point `y`: pick emitter `e` with probability `p_e`, a triangle with probability
+`A_t / A_e`, a uniform point on it (square-root parameterization). The area density is exactly
+`pdf_A(y) = p_e / A_e`. The emitting side is the triangle's geometric normal `n_y`; a point only
+contributes when `cos(theta_y) = dot(n_y, -w) > 0` (one-sided). Scaling an instance changes `A_t`,
+`A_e`, `p_e`, and the visible surface together, which test T09 checks.
+
+## The path integrator (spec §12)
+
+`shaders/trace/path_trace.hlsl`, one camera path per pixel per dispatch. Notation: `T` is the path
+throughput (starts at 1), `x` the current vertex with shading normal `n`, `f = rho / pi` the
+Lambertian BRDF, `p_B(w) = cos(theta) / pi` the BSDF (cosine-hemisphere) density, `p_L(w)` the
+solid-angle density of the emitter sampling above, `w_L` and `w_B` the MIS weights.
+
+**Loop** for `hit = 0 .. maxHits - 1` (`maxHits` includes the camera hit and mirror hits;
+production value 4):
+
+1. `TraceClosest`. A miss ends the path (black environment).
+2. **Emission found by the ray.** If the surface is an active emitter's front side, add
+   `T * L_e * w_B` where
+   - `w_B = 1` when `hit == 0` (camera ray) or the previous vertex was a mirror (no other
+     strategy could have produced this contribution), or in `bsdf` mode;
+   - `w_B = p_B^2 / (p_B^2 + p_L^2)` in `mis` mode, with `p_B` the density of the direction that
+     produced this hit and `p_L = pdf_A(y) * d^2 / cos(theta_y)` for the hit point;
+   - `w_B = 0` in `light` mode.
+   Emission is therefore counted once: either here or through next-event estimation, weighted so
+   the two strategies sum to one.
+3. **Mirror** (delta): reflect the direction about `n`, `T *= reflectance`, mark the vertex as
+   delta, continue (no next-event estimation, no MIS against a strategy that cannot run).
+4. **Next-event estimation** at a diffuse or emitter surface (`mis` and `light` modes): sample `y`,
+   `w = (y - x) / d`, `cos(theta_x) = dot(n, w)`, `cos(theta_y) = dot(n_y, -w)`; skip when either is
+   not positive; `p_L = pdf_A(y) * d^2 / cos(theta_y)` (solid-angle measure, the same measure as
+   `p_B`); if the segment is unoccluded add `T * f * L_e * cos(theta_x) / p_L * w_L` with
+   `w_L = p_L^2 / (p_L^2 + p_B^2)` (power heuristic) in `mis` mode, `w_L = 1` in `light` mode, and
+   `w_L = 1` at the last vertex in every mode because no BSDF continuation can compete there
+   (spec §12, "MIS weights must match the strategies that can actually contribute").
+5. **Termination** at the last vertex. Otherwise sample the BSDF: `w' ~ cos-hemisphere(n)`,
+   `p_B = cos / pi`, `T *= f * cos / p_B = rho`, remember `p_B` for step 2 of the next hit.
+
+There is no Russian roulette (fixed short production path; the reference mode uses more hits, not
+survival sampling). Paths with zero throughput stop early.
+
+**Path families.** With `N` hits, `mis` and `light` include direct light at the `N`-th surface
+through next-event estimation, so they cover emitter positions up to `N + 1` along the path.
+`bsdf` can only reach an emitter as one of its `N` hits. Comparing the estimators on the same
+family therefore gives `bsdf` one extra hit (`--max-hits N+1`); test T08 does exactly that and the
+three agree within 1 %.
+
+**Two-sided surfaces.** Diffuse and emitter surfaces shade with the geometric normal flipped
+toward the incoming ray; emission uses the unflipped normal so only the front emits.
+
+## Numerical robustness (spec §11)
+
+- Secondary-ray origins use the scale-aware method from Ray Tracing Gems chapter 6 ("A Fast and
+  Robust Method for Avoiding Self-Intersection", `OffsetRay` in `sampling.hlsli`): an integer ULP
+  offset (scale 256) along the geometric normal for coordinates with `|p| >= 1/32`, a fixed
+  `1/65536` float offset closer to the origin. The normal points toward the side the new ray
+  travels on.
+- Shadow rays run from `OffsetRay(x, n)` to `OffsetRay(y, n_y)` with an unnormalized direction
+  `q - p` and the finite interval `[0, 1 - 1e-4]`, so neither endpoint's own surface is hit.
+- There is no per-asset bias. Tests T03 and T04 (zero radiance in sealed geometry with 0.15 m
+  walls, 0.04 m door, 0.005 m door inset) and the analytic tests pass with these offsets.
+
+## Sampling (spec §12)
+
+- Generator: `Hash4(pixelKey, sampleIndex, dimension, seed)` with the PCG output permutation
+  (`sampling.hlsli`), 24 significant bits per value. Deterministic for a given seed; no clock input.
+  It is a hash sequence, not a low-discrepancy sequence (recorded as an approximation below).
+- Dimensions: 0-1 camera jitter; for bounce `b`: `2 + 8b + 0` emitter selection, `+1` triangle,
+  `+2, +3` point on the triangle, `+4, +5` BSDF direction, `+6, +7` reserved.
+- Raw mode uses `sampleIndex = 0` and `seed = baseSeed + 7919 * frameIndex` so the noise pattern
+  changes every frame; reference mode uses the accumulated sample index.
+- Invalid values: NaN, infinity, and negative components of a sample are counted in a GPU stats
+  buffer (and neutralized to zero so they cannot hide in an average); zero-probability events are
+  counted too. `--validate` requires all counters to be zero.
+
+## Modes (spec §13)
+
+| Mode | What happens | Selection |
+|---|---|---|
+| Diagnostic (`--mode diag`) | `camera_view.hlsl`, one ray per pixel, view selected by `--view` | M1 views |
+| Raw real-time (`--mode raw`) | One path sample per pixel per frame, no accumulation, seed varies per frame | Default |
+| Progressive reference (`--mode reference`) | The scene is frozen; `--samples-per-frame` dispatches per frame accumulate until `--spp`; no denoising | Tests, captures |
+| Real-time reconstruction | **not implemented** (M4) | |
+
+Accumulation is reset when an "accumulation key" changes: camera pose and lens, render size, mode,
+`--max-hits`, `--strategy`, `--seed`, jitter, the scene's instance count, any instance transform
+revision, or the material revision (emitter on/off). Exposure does not reset it. Each dispatch
+increments the sample index; the reset dispatch overwrites the sums instead of adding.
+
+## Accumulation, statistics, and display
+
+- `accum` (RGBA32F): running sum of samples and the sample count in `.w`; `accumSq`: running sum of
+  squares. Mean `m = sum / N`. Per-pixel sample variance
+  `s^2 = max(0, sumSq / N - m^2) * N / (N - 1)`; standard error of the pixel mean
+  `se = sqrt(s^2 / N)` (zero when `N < 2`). The readback recomputes the mean from the sums.
+- Patch statistics: mean over the patch pixels of `m`; standard error of the patch mean
+  `sqrt(sum(se^2)) / P` assuming independent pixels.
+- Display: `sRGB(saturate(m * exposure))`, once, in the same dispatch. There is no tone mapping
+  yet (clamp only, so radiance above `1 / exposure` saturates). Exposure is a display setting and
+  is not part of captured radiance.
+- Hit info in path modes: `x` = stable id of the first non-mirror surface (or the last mirror when
+  the path leaves the scene through it), `w` = number of mirror bounces before it.
 
 ## Captures
 
 `--capture <dir>` writes, from the running program after the last frame:
 
-- `<scene>_<view>_f<frame>.png`: the 8-bit display image (lossless, stored-deflate PNG).
-- `<scene>_<view>_f<frame>.pfm`: the linear float RGB image (the shader's colour before the
-  8-bit store; for diagnostic views this is the same colour, for M2 it becomes radiance).
-- `<scene>_<view>_f<frame>.json`: scene, view, frame index, sample index, seed, path depth,
-  exposure, render size, output size, reconstruction state, adapter, driver, build commit and
-  config, timestamp, instance and triangle counts, GPU timings per pass.
+- `<scene>_<mode>_<strategy>_spp<N>.png` (or `<scene>_<view>_f<frame>.png` for diagnostics): the
+  8-bit display image (lossless, stored-deflate PNG).
+- the matching `.pfm`: the linear float RGB image, which is the mean scene-linear radiance in raw
+  and reference modes (`"linearIsRadiance": true` in the metadata) or the diagnostic colour.
+- the matching `.json`: scene, view or mode, strategy, frame index, samples per pixel, seed, path
+  depth, exposure, render size, output size, reconstruction state, adapter, driver, build commit
+  and config, timestamp, instance, triangle, and emitter counts, GPU timings per pass.
 
-## Not implemented yet (M2 and later)
+`--stats <file>` writes mean and standard error per channel for the scene's statistics patches.
 
-Material model and parameter ranges; emitter radiance convention and scale; source selection,
-emitter-surface sampling and area-to-solid-angle conversion; surface sampling and MIS weights;
-delta (mirror) handling; path limits and termination; sampling sequence and seed dimensions;
-invalid-value detection; reference and raw modes; denoiser buffer contract; history policy;
-exposure and display transform.
+## Shared GPU records
+
+`FrameConstants` (b0, 256 bytes), `IntegratorConstants` (b1, 32 bytes), `InstanceRecord` (t1,
+112 bytes, TLAS order, carries `emitterIndex`), `MeshRecord` (t2), positions (t3), indices (t4),
+`MaterialRecord` (t5, 48 bytes), `EmitterRecord` (t6, 48 bytes), `EmitterTriangle` (t7, 16 bytes).
+UAV table: u0 display, u1 linear, u2 hit info, u3 layout probe, u4 accumulation, u5 accumulation
+of squares, u6 stats. Matrices in structured buffers are three explicit `float4` rows.
+
+## Known approximations (spec H05)
+
+- Finite path length (4 hits in production) and one sample per pixel per frame in raw mode.
+- Hash-based sampling rather than a low-discrepancy sequence; convergence is `1/sqrt(N)`.
+- Float32 accumulation sums (adequate to a few thousand samples at these radiance levels).
+- Two-sided diffuse shading; emitter surfaces reflect diffusely; no rough conductor yet (§7's
+  `RoughConductor` is planned after the M2 gate); no participating media; no tone mapping.
+
+## Not implemented yet
+
+Rough conductor material; denoiser buffer contract and history policy (M4); motion vectors and
+previous-frame data (the records carry previous transforms but no pass consumes them); scene
+files (M3); tone mapping beyond clamping.

@@ -74,6 +74,41 @@ Format: date, issue, evidence, decision, consequence, rollback.
 - Decision: `--width/--height` set both the window client size and the trace resolution; the spec's 1280x720 internal / 1920x1080 output split arrives with the scaled presentation path in M4.
 - Consequence: `CopyResource` requires identical sizes; a mismatch skips the present copy with a warning until the next resize.
 
+## D-014 (2026-09-06) Explicit material types
+
+- Decision: `Diffuse`, `Mirror`, `Emitter` as explicit records with validated ranges (spec §7); emitters carry their own diffuse reflectance so an off source stays a surface; no material graph, no normal maps, no metalness model.
+- Rollback: add `RoughConductor` as a fourth explicit type (planned), never a generic graph.
+
+## D-015 (2026-09-06) Closed-form irradiance as the M2 reference
+
+- Issue: T08/T09 need an independent reference for the estimator.
+- Decision: the configuration-factor formula for a Lambertian rectangle (`RectangleIrradianceAtPoint`) is checked against numerical quadrature on the CPU and then used as the truth for the GPU estimators on an open floor. Enclosed scenes are checked by estimator cross-agreement and higher-sample agreement instead.
+- Consequence: an integrator error in NEE, BSDF sampling, or MIS weights shows up as a relative error against a known number, not as a "looks plausible" judgement.
+
+## D-016 (2026-09-06) Hash-based deterministic sampling
+
+- Decision: `Hash4(pixel, sample, dimension, seed)` with the PCG permutation; fixed dimension table per bounce; no clock input; raw mode varies the seed per frame.
+- Consequence: `1/sqrt(N)` convergence; a low-discrepancy sequence can replace it later behind the same `Rand(key, dimension)` interface.
+
+## D-017 (2026-09-06) Same path family when comparing estimators
+
+- Evidence: `bsdf` at 4 hits was 5–9 % below `mis`/`light` at 4 hits in the closed box while all three matched the analytic open-floor value.
+- Decision: NEE-based estimators with `N` hits reach direct light at the `N`-th surface; BSDF-only needs `N + 1` hits for the same family. The comparison test uses `bsdf` with 5 hits; the production integrator keeps 4 hits with NEE at the last vertex (weight 1).
+- Consequence: documented in RENDERING.md and TESTS.md; the tolerance (3 %) was not widened.
+
+## D-018 (2026-09-06) Raw mode shows a single sample per frame
+
+- Decision: raw mode resets accumulation every frame and changes the seed with the frame index, so the image is the current sample only (spec §13 "show current samples without temporal filtering"). Temporal reconstruction is a separate mode (M4).
+
+## D-019 (2026-09-06) Built-in generated scenes until M3
+
+- Decision: test scenes are C++ builders on the generated kit (rooms with 0.15 m slabs, doorway frames, hinged 0.04 m doors, rectangle emitters). Versioned JSON scene files and the glTF subset arrive with M3, when the two-room proof needs sockets, circuits, and waypoints.
+
+## D-020 (2026-09-06) Scene redesign instead of tolerance change (T07)
+
+- Evidence: the first T07 layout (red and white boxes) gave a redness ratio of 1.18 against a pre-chosen 1.2 factor.
+- Decision: keep the factor; make the scene physically stronger (a full red wall against a white wall, patches 0.15 m from each). Observed ratio afterwards clears the factor with margin.
+
 ## D-013 (2026-09-06) Repository workflow for this session
 
 - Decision: work on branch `m0-m1-bootstrap` with small commits; nothing is pushed; `build/` and `artifacts/` are ignored. The owner decides on merging.

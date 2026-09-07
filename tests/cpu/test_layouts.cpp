@@ -14,6 +14,12 @@ LC_TEST(layouts_match_the_hlsl_contract) {
     LC_CHECK_EQ(offsetof(lc::gpu::InstanceRecord, meshIndex), std::size_t{96});
     LC_CHECK_EQ(sizeof(lc::gpu::MeshRecord), std::size_t{16});
     LC_CHECK_EQ(sizeof(lc::gpu::HitInfoTexel), std::size_t{16});
+    LC_CHECK_EQ(sizeof(lc::gpu::IntegratorConstants), std::size_t{32});
+    LC_CHECK_EQ(sizeof(lc::gpu::MaterialRecord), std::size_t{48});
+    LC_CHECK_EQ(offsetof(lc::gpu::MaterialRecord, radiance), std::size_t{32});
+    LC_CHECK_EQ(sizeof(lc::gpu::EmitterTriangle), std::size_t{16});
+    LC_CHECK_EQ(sizeof(lc::gpu::EmitterRecord), std::size_t{48});
+    LC_CHECK_EQ(offsetof(lc::gpu::EmitterRecord, selectionPdf), std::size_t{20});
 }
 
 LC_TEST(view_modes_round_trip_by_name) {
