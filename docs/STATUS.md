@@ -8,9 +8,15 @@ Milestone:            M0 PASSED, M1 PASSED, M2 PASSED, M3 PASSED,
                       M4 PASSED for the native-resolution denoised path (NRD REBLUR with Primary Surface Replacement
                       for the mirror; T12 temporal tests pass; the moving sequences and the performance results are
                       recorded below). DLSS Super Resolution through Streamline: NOT evaluated (deferred, KI-021).
-                      M3.5 (JSON scene files, reload) not started.
+                      M3.5 PASSED: the two-room level is a versioned JSON scene file (assets/scenes/two_room.json,
+                      schema 1) with complete validation, limits, and asset-root containment; reload at a frame
+                      boundary that never replaces a working scene with a broken one; content hashes in captures and
+                      reports; the diagnostic panel is deferred to M5 (KI-017).
+                      M5 in progress: collision (capsule against the kit boxes, lamp sweep, door that never traps
+                      the player) and the placeholder player body are written and tested on the CPU; the rest of
+                      M5 (prompts and menus, sound, threat states, objective, restart) follows the M5 plan.
 Build or commit:      branch m0-m1-bootstrap; see git log for the exact commit.
-                      Presets windows-debug and windows-release both configured, built, and tested (44 tests each).
+                      Presets windows-debug and windows-release both configured, built, and tested (46 tests each).
 Environment:          Windows 11 Home 10.0.26200.9278 (25H2); Intel Core i7-14700F, 31.8 GiB RAM;
                       Visual Studio Community 2026 18.9.12120.119, MSVC 14.51.36231 (cl 19.51.36256);
                       CMake 4.3.1-msvc1 (VS-bundled); Windows SDK 10.0.26100.0; DXC 1.8.2502.11 + dxil.dll;
@@ -82,11 +88,10 @@ Changed assumptions:  NRD's license is NVIDIA's proprietary RTX SDK license (att
                       recorded for the owner's review. The denoiser's spatial filter biases sharp lighting gradients
                       by a few percent (KI-018); the raw mean stays exact. Mirror planes are static for the PSR
                       motion (KI-020).
-Next concrete task:   M3.5 step 1 (plan first): versioned JSON scene files with stable identifiers for the two-room
-                      level (objects, sources, circuits, sockets, waypoints), a reload command that parses and
-                      validates before swapping at a frame boundary (with the history reset), and a content hash in the
-                      capture and benchmark metadata; then M5 (collision, player body, sound, threat encounter,
-                      objective, restart) with the T13 test.
+Next concrete task:   M5 Task 3 of docs/superpowers/plans/2026-09-06-m5-playable-proof.md (Dear ImGui prompts, pause
+                      menu, settings, diagnostic panel), then Tasks 4 (sound), 5 (threat states, objective, catch and
+                      checkpoint restart), and 6 (records; T13-T15 replays; the human play-through). Tasks 1 and 2
+                      (collision, body) are implemented and unit-tested; their GPU replay tests run with Task 6.
 ```
 
 ## Benchmark table (M4, two-room proof)
@@ -97,6 +102,22 @@ Filled from `artifacts/m4/benchmark_*.json` (Release, `--vsync off`, windowed 19
 with a world reset at its end). CPU is the whole frame on the render thread (simulation, record,
 submit, present), GPU is the `frame_gpu` timestamp pair.
 
-| Replay | Run | Frames | GPU avg / median / p95 / p99 / max (ms) | CPU avg / p95 / p99 / max (ms) | GPU > 33.3 ms | Note |
+| Replay | Run | Frames (60 s) | GPU avg / p95 / p99 / max (ms) | CPU avg / p95 / p99 / max (ms) | GPU > 33.3 ms | Note |
 |---|---|---|---|---|---|---|
-| (pending: filled in after the runs) | | | | | | |
+| t12_mirror_motion (camera walk, door, mirror, moving threat) | 1 | 28866 | 2.05 / 2.85 / 3.16 / 3.49 | 2.08 / 2.94 / 3.24 / 3.63 | 0 | 33 replay loops |
+| t12_mirror_motion | 2 | 29624 | 2.00 / 2.72 / 2.88 / 3.38 | 2.02 / 2.78 / 2.94 / 4.49 | 0 | 34 loops |
+| t12_mirror_motion | 3 | 29561 | 2.00 / 2.73 / 2.88 / 3.54 | 2.03 / 2.79 / 2.94 / 4.39 | 0 | 34 loops |
+| t06_door_light (door motion, source change through the doorway) | 1 | 28577 | 2.07 / 2.78 / 2.97 / 3.59 | 2.10 / 2.85 / 3.01 / 4.58 | 0 | 73 loops |
+| t12_lamp_motion (carried lamp, lamp switch, shelf placement) | 1 | 29050 | 2.04 / 2.75 / 2.91 / 3.54 | 2.06 / 2.81 / 2.95 / 4.15 | 0 | 39 loops |
+| t12_mirror_motion, raw mode (no denoiser) | 1 | 37243 (30 s) | 0.78 / 1.41 / 1.64 / 2.02 | 0.80 / 1.41 / 1.62 / 2.22 | 0 | denoising costs ~1.2 ms per frame |
+| t12_mirror_motion, native 1920x1080 internal | 1 | 6667 (30 s) | 4.47 / 5.04 / 5.26 / 5.99 | 4.50 / 5.09 / 5.33 / 6.82 | 0 | 2.25x the pixels, 2.2x the time |
+
+Reading: the two-room proof, reconstructed, uses about 2 ms of the 16.67 ms frame period on this
+GPU (spec §17 planning allocation 13 ms); the 95th and 99th percentiles are within 3.3 ms. The
+proof is far smaller than the six-room encounter, so these are not the product's numbers: the
+§17 pass criterion (p95 <= 16.67 ms, p99 <= 22 ms) is checked again with the M5/M6 content on the
+180-second replay. Process working set about 180 MB, video memory in use about 300 MB
+(`artifacts/m4/benchmark_release_*.json`). The Debug build with the debug layer on measures the
+same GPU time (its `-Od` shaders do not dominate a RayQuery-bound frame). An earlier set of
+mirror-replay runs was invalid: the benchmark loop then still executed the trail-lag test's
+per-frame readback (60 ms CPU frames); the loop now never reads back (recorded, not hidden).
