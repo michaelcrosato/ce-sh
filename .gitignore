@@ -1,0 +1,13 @@
+# Build trees and generated outputs
+build/
+out/
+artifacts/
+
+# IDE and tool state
+.vs/
+.vscode/
+*.user
+CMakeUserPresets.json
+
+# Logs
+*.log
