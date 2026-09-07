@@ -10,6 +10,20 @@
 
 **Spec:** §4 (sequence), §5 (layout, power, presentation), §6 (budgets), §14–§16, §17 (T16 protocol), §19 T13–T17, §20 M6 gate, §21, §22.
 
+**Status (2026-09-07):** Tasks 1–6 implemented, tested, and committed on `m0-m1-bootstrap`.
+Deviations from the text below, all recorded in `docs/DECISIONS.md` and `docs/KNOWN_ISSUES.md`:
+the routing lives in `Threat` (`PlanRoute` / `FollowRoute` over the patrol polyline) rather than a
+`game/nav` module (D-049); the Plant room is a side room off Hall B with a ceiling fan under its
+fixture, and the Switch room's fixture is on the fused circuit (KI-030); the mirror sits at 1.3 m so
+its reflected ray descends onto the machine (D-050); an item that hides when carried goes into a
+pocket beside the hand (D-051; the plan's single held item refused the fuse); the encounter replay
+is 99 s and the caught variant 118 s (the §17 measurements are three 180-second runs of the looping
+encounter plus one of the caught variant); the image checks run frozen at their ticks in reference
+mode instead of inside one denoised run (D-052, KI-031/KI-033); the "fan shadow sequence" is a pair
+of blade identity checks a quarter second apart plus the stopped fan at its integrated rest angle;
+the 78-mesh count against the §6 reusable-mesh budget is KI-029. The human items of the M6 gate are
+NOT RUN (`docs/STATUS.md`).
+
 ## Global Constraints
 
 - "Keep the level on one floor. Aim for approximately 160–220 square metres of walkable space, including halls." (§5)

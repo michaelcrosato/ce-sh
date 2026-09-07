@@ -136,27 +136,61 @@ filter, so it sounds quieter rather than muffled. The threat cue through a wall 
 3 m ("nearby" is true, the machine is a wall away), which is by design but may read as a spoiler
 at the start of the proof, where the machine begins 2.4 m from the player behind Room A's wall.
 
-## KI-025 — info — play mode — no fan in the proof, hands do not grip the lamp
+## KI-025 — closed in M6 — the fan exists; hands still do not grip the lamp
 
-Spec §15 lists fan rotation among the first sounds; the two-room proof has no fan, so the fan clip
-(`FanLoop`) is generated and tested but unused until M6 places one. The hands stay at rest while
-the lamp is carried (KI-023).
+The six-room demo's Plant room has a ceiling fan under a real fixture on the fused circuit; the
+fan loop follows its speed and stops with it (D-048). The hands stay at rest while the lamp is
+carried (KI-023).
 
-## KI-026 — low — play mode — the machine moves in straight lines off its path
+## KI-026 — closed in M6 for the halls — routing along the patrol polyline
 
-Chase, investigate, and return steps head straight for their target and slide along the collision
-solids (D-043). A target around a corner can leave the machine pushing against a wall until its
-stuck timer (1.5 s) ends the move or cycles the return target through the waypoints. The proof's
-hall has one corner and the round is a straight segment, so this stays cosmetic; the six-room demo
-(M6) needs waypoint routing.
+Off-path moves that are blocked at body height follow the patrol polyline between the closest
+points (D-049); a room interior still uses the straight line and the 1.5 s stuck timer.
 
-## KI-027 — info — play mode — the start is inside the machine's dark range
+## KI-027 — info — play mode — the proof's start is inside the machine's dark range
 
-The machine starts its round 2.4 m from the player's start through Room A's wall, so the first
-"nearby" cue fires at once (KI-024) and the catch replay shows how quickly a lit lamp in the
-doorway is seen (chase at tick 156). The careful route waits behind the wall and crosses the hall
-behind the machine at a sprint; the level's timing is tight (about 0.6 m of margin at the
-crossing) and a redesign of the round belongs to the M6 layout work.
+The two-room proof keeps its layout: the machine starts 2.4 m from the player's start through Room
+A's wall, the first "nearby" cue fires at once (KI-024), and the crossing has about 0.6 m of
+margin. The six-room demo starts the player 3.3 m from the round behind the Security room's wall
+(no cue at the start) and its route waits the machine out at each crossing.
+
+## KI-029 — medium — six-room demo — 78 meshes against the spec's 20–30 reusable meshes
+
+The room kit generates one mesh per slab, box, opening piece, and door leaf, so `six_room.json`
+builds 78 meshes for 81 instances (872 triangle instances, far below the 100,000 budget; 81 placed
+objects against 500). Spec §6 asks for 20–30 reusable meshes: the kit would need parametrised
+instancing (one unit box scaled per instance) or shared wall segments to meet that number.
+Verification: a mesh count in `test_six_room.cpp` once the kit shares meshes.
+
+## KI-030 — info — six-room demo — layout differences from the plan
+
+The Plant room is a side room off Hall B (its fan is a ceiling fan under the fixture, not a fan set
+into the east wall as the plan sketched) and the Switch room's fixture is on the fused circuit, so
+the room goes dark the moment the fuse is pulled (the lamp is the way out, as the spec's return
+sequence intends). The mirror sits at 1.3 m rather than eye height so that the reflected ray from
+the check pose descends onto the machine (a mirror that only yaws cannot aim it otherwise). The
+walkable area is 193 m² (spec §5: 160–220).
+
+## KI-031 — info — denoised mode — patch checks on 1 spp raw samples are not usable for dark surfaces
+
+The recomposed raw mean of a 5x5 patch after one frame is one path sample per pixel: a Hall A floor
+patch whose converged luminance is 2e-5 read 0.010 in a denoised-mode run (one bright bounce off
+the lit doorway spill). The replay image checks therefore run frozen in reference mode (D-052);
+denoised-mode checks keep using `denoised_patch_*` on the reconstructed image over enough frames.
+
+## KI-032 — info — six-room demo — the mirror check pose is a close call by design
+
+At the inspection mirror pose the machine passes 2.3 m away through the open door with the lamp
+off (detection range 2.5 m): it does not see the player because it looks along the hall, and its
+facing cone only reaches the pose from 2.66 m away. A step toward the door there is a catch. The
+replay stands still; a person may not.
+
+## KI-033 — low — replays — one frozen run per image-check tick
+
+Image checks are evaluated on a run's final image, so the encounter's nine image-check ticks are
+nine `--stop-at-tick` runs (each about a second in Release). A single run that evaluated image
+checks at their ticks would need the final-image evaluation block refactored to run mid-loop
+(D-052).
 
 ## KI-028 — info — windowed runs — desktop screen captures show transparent holes the app never draws
 
@@ -170,6 +204,16 @@ come from the desktop composition of the flip-model swap chain (`DXGI_ALPHA_MODE
 by GDI capture, not from the renderer or the interface. Evidence: `artifacts/m5/ui/speckles`
 (`h_backbuffer/backbuffer_frame340.png` and `_alpha.png` fully opaque next to `h_printwindow.png`
 with holes). Use the in-app captures for image evidence; screenshots are for layout only.
+
+## KI-034 — low — both presets — the linker warns LNK4098 (LIBCMT) since M5
+
+Linking `LastCircuit.exe` and `lc_cpu_tests.exe` prints `LNK4098: defaultlib 'LIBCMT' conflicts
+with use of other libs` in Debug and Release since the sound task of M5 (the build logs of that
+task show it first; the compiler stays `/W4 /WX` clean). Some object in the link asks for the
+static release CRT while the presets use the dynamic CRT. Nothing misbehaves in the tests, but a
+mixed CRT is not acceptable for the M7 package. Verification: link once with `/VERBOSE:LIB` to name
+the object, then build that library with the presets' runtime or add the `/NODEFAULTLIB` the
+warning suggests, and record the choice with the packaging decision (BUILD.md "Packaging").
 
 ## KI-012 — info — all builds — raw mode is noisy by design
 

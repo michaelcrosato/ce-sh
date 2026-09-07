@@ -4,7 +4,7 @@
 
 ```powershell
 . .\tools\env.ps1
-ctest --preset windows-debug --output-on-failure      # everything (about 30 s on the reference machine)
+ctest --preset windows-debug --output-on-failure      # everything (72 tests; about 3 minutes in Debug, 2.5 in Release on the reference machine)
 ctest --preset windows-debug -L cpu                    # portable unit tests only
 ctest --preset windows-debug -L gpu                    # tests that need the GPU
 .\build\windows-debug\bin\lc_cpu_tests.exe --list      # case names
@@ -18,7 +18,7 @@ a supported GPU therefore reports the GPU tests as NOT RUN.
 Tolerances were chosen before the tests were run and are recorded here; they must not be widened
 to pass. When a scene was redesigned (T07, see below) the tolerance stayed and the scene changed.
 
-## CPU tests (`cpu_tests`, 96 cases in `tests/cpu`)
+## CPU tests (`cpu_tests`, 103 cases in `tests/cpu`)
 
 | File | Checks |
 |---|---|
@@ -40,10 +40,11 @@ to pass. When a scene was redesigned (T07, see below) the tolerance stayed and t
 | `test_reconstruction.cpp` | NRD matrix conversion to column-major; the Halton(2,3) jitter stays within half a pixel, does not repeat within its sequence, and wraps |
 | `test_temporal_checks.cpp` | Trail-lag metric: measured lag on synthetic series, pass/fail against the limit, and invalid series (never leaves, too short, re-entry, no contrast) reported instead of guessed |
 | `test_benchmark.cpp` | Nearest-rank percentiles, median, counts above 33.3 / 50 ms; the report parses back as JSON with every required section |
-| `test_scene_file.cpp` | The golden `two_room.json` reproduces the proof level (material and instance counts, circuit states, door hinge, sockets, path, markers, the derived mirror aim within 1e-5, collider flags, deterministic reload hash); every validation rule rejects a patched document with a message naming the list, identifier, or field (schema, JSON syntax, duplicate id, unknown material, reflectance range, unknown circuit, box without centre, negative extent, opening leaving no wall, non-axis facing, unknown marker, objectives not implemented, zero speed); limits (object count, file size); asset-root containment (parent traversal and absolute paths refused, missing file reported) |
+| `test_scene_file.cpp` | The golden `two_room.json` reproduces the proof level (material and instance counts, circuit states, door hinge, sockets, path, markers, the derived mirror aim within 1e-5, collider flags, deterministic reload hash); every validation rule rejects a patched document with a message naming the list, identifier, or field (schema, JSON syntax, duplicate id, unknown material, reflectance range, unknown circuit, box without centre, negative extent, opening leaving no wall, non-axis facing, unknown marker, objectives not implemented, zero speed); limits (object count, file size); asset-root containment (parent traversal and absolute paths refused, missing file reported); schema 2 (M6): the golden file's doors, items, sockets with accept lists, powered circuits, and objective steps; rejection of a door leaf without a door entity, a socket accepting an unknown item, a `poweredBy` whose socket does not accept the item or whose initial state disagrees, a fan with a non-whole blade count or one outside the limits; a fan builds its hub and blades as separate instances with radial frames |
 | `test_collision.cpp` | Oriented boxes from the level's kit parts (the door leaf follows its angle); the capsule is pushed out of a wall it enters and slides along it; a centre on a face never crosses to the far side; the sphere sweep stops the carried lamp at a wall; a closing door that meets the player swings back open (`DoorBlocks` counts it); segment tests see through an open doorway and not through the closed leaf; the player cannot walk through the closed door or the walls in the replays (`t05`, `t06`) |
-| `test_objective.cpp` | The objective advances only on its events (lamp taken, placed on the shelf socket and not the floor one, taken back; the exit counts only with the lamp retrieved) and saves a checkpoint at each phase; in hunt mode the machine ignores the lit lamp behind the closed door, chases it in the open doorway, catches, and the restart restores the checkpoint pose, phase, door, and lamp with the machine back at its path start; detection needs range (2.5 m dark, 8 m lit), facing, and a clear line; the state hash is equal for equal inputs and differs for one different input or one extra tick; the state-check log evaluates checks after their tick and reports pending ones; the committed `t15_route` and `t15_catch_restart` replays pass every check on the CPU, deterministically, and hash differently |
-| `test_audio.cpp` | Inverse-square attenuation clamped inside the reference distance and silent past the maximum; pan +1/-1/0 and the diagonal from the listener's right axis, turning the listener turns the pan; the occlusion factor scales the level and keeps the pan; every generated clip is non-empty, finite, under three seconds, peaks between 0.05 and 1, carries a `generated:` provenance, and is deterministic (the hum loop's ends meet, the room tone is exactly 2 s, the footstep variants differ); the director starts hums for lit fixtures only, stops one when its circuit goes off and starts one that comes on, moves the lamp's hum with its transform; door creak and thud on the state edges with the "creaks"/"shuts" cues, lamp click and handling, three footsteps over 2 m alternating variants and never occludable; the machine's loop runs only while it moves (a tick-less frame keeps it, a stop longer than the hold ends it), its cue respects the 6 m / 3 m occluded rule and the 5 s period; chime and sting; the system without a device keeps the cues and drops nothing |
+| `test_objective.cpp` | The objective advances only on its events (lamp taken, placed on the shelf socket and not the floor one, taken back; the exit counts only with the lamp retrieved) and saves a checkpoint at each phase; in hunt mode the machine ignores the lit lamp behind the closed door, chases it in the open doorway, catches, and the restart restores the checkpoint pose, phase, door, and lamp with the machine back at its path start; detection needs range (2.5 m dark, 8 m lit), facing, and a clear line; the state hash is equal for equal inputs and differs for one different input or one extra tick; the state-check log evaluates checks after their tick and reports pending ones; the committed `t15_route` and `t15_catch_restart` replays pass every check on the CPU, deterministically, and hash differently; M6 on the proof file patched with a fuse, a fuse box, an exit panel, a powered circuit, a fan, and a locked door: the fuse is offered beside the locked door, hides in the torso when taken, powers the circuit from the exit panel (the fixture lights, the fan spins up to full speed in 3 s with its blades' transforms changing every tick, the locked door opens by itself), taking it back darkens the circuit and spins the fan down to a stop with the door left open, and the hash covers the circuit; a pocketed item is taken with the lamp in the hand, each socket takes the held item it accepts (the panel the fuse, the floor socket the lamp), and the pocketed item's transform is written only when the player moves |
+| `test_audio.cpp` | Inverse-square attenuation clamped inside the reference distance and silent past the maximum; pan +1/-1/0 and the diagonal from the listener's right axis, turning the listener turns the pan; the occlusion factor scales the level and keeps the pan; every generated clip is non-empty, finite, under three seconds, peaks between 0.05 and 1, carries a `generated:` provenance, and is deterministic (the hum loop's ends meet, the room tone is exactly 2 s, the footstep variants differ); the director starts hums for lit fixtures only, stops one when its circuit goes off and starts one that comes on, moves the lamp's hum with its transform; door creak and thud on the state edges with the "creaks"/"shuts" cues, lamp click and handling, three footsteps over 2 m alternating variants and never occludable; the machine's loop runs only while it moves (a tick-less frame keeps it, a stop longer than the hold ends it), its cue respects the 6 m / 3 m occluded rule and the 5 s period; chime and sting; the system without a device keeps the cues and drops nothing; fans (M6): the loop starts when a fan turns, its level follows the speed fraction, and it stops with the fan |
+| `test_six_room.cpp` | The demo file loads with its expected entities (7 doors with the exit door locked, 2 items, 1 fan, 7 steps, 7 circuits, 4 sockets, 3 path points; 81 instances, 872 triangle instances, 78 meshes; 10 fixtures with 8 active; walkable area 193.1 m²); every room, hall, and the vestibule is enclosed (62-direction ray sweeps from each centre at 1.4 m hit a solid) and every door leaf's corners stay clear of solids at 0, 45, and 90 degrees; the machine's route from the Plant doorway to the Hall B line goes around the corner along the polyline and it is back on patrol in 58 ticks; the mirror's aim bisects the check camera and the hall point, the parked machine is seen through the open inspection door by the CPU caster, the route is clear of solids, and every socket and marker rests on its support inside a room |
 
 ## GPU tests (`tests/gpu/CMakeLists.txt`)
 
@@ -174,6 +175,62 @@ replay that walked through geometry would stop at the wall and its pose checks w
 T06 door-open test caught the first body placement (D-039): the torso hid the floor patch a metre
 ahead and the check dropped from 0.0196 to 0.0048; the body moved, the threshold did not.
 
+### M6: the six-room demo (spec §4, §5, §15, §17, §19 T04–T06, T12–T16)
+
+The demo is `assets/scenes/six_room.json` (schema 2, D-046) with two replays, both in hunt mode.
+`t16_encounter.json` (5961 ticks, 99 s): Security → Hall A while the machine walks away east →
+Equipment (the lamp taken and switched off) → Inspection (the lamp on the shelf and switched on;
+the mirror check pose, where the machine's head is seen in the mirror as it crosses Hall A behind
+the open door) → the lamp taken back → Hall A east and Hall B south, the Plant door opened (the
+running fan seen from the doorway) → the Switch room (`fuse_available`), the fuse pulled while the
+lamp is carried (`fuse_carried`: the hall circuit dies, so the Switch room, both halls, the Plant
+room and its fan lose power) → the machine's pass waited out → the return north behind it at
+walking pace in the dark, with a glance at the stopped fan → Hall A west behind it → into the
+Equipment room while the machine turns at the west end and comes back east → Hall A west → the
+Exit room, the fuse into the exit panel (`exit_powered`: the vestibule lights and the locked exit
+door opens) → the vestibule with the lamp (`escaped` at tick 5920). `t16_caught.json` (7084 ticks):
+the same inputs until the fuse, then out of the Switch room too early up dark Hall B into the
+machine coming south (chase at tick 3479, caught at 3513), the restart from the `fuse_carried`
+checkpoint (the player back at the fuse box, the machine back at the start of its round), and the
+encounter's inputs from the wait onward shifted by 1123 ticks to the restarted round's timing
+(`escaped` at 7043). The image checks of the replays are evaluated frozen at their tick (D-052).
+
+| Test | Command (abridged) | Checks (and the values measured on the recorded machine) |
+|---|---|---|
+| `gpu_six_room_static_mirror` | `--scene six_room --mode reference --spp 32 --validate --headless` | The static scene with the inspection door opened for the check (D-050): the mirror pixel reports the machine parked at the hall point after one mirror bounce; the mirror patch is lit (`> 1e-4`, measured 2e-4) |
+| `sim_t16_encounter_cpu_only` | `--replay t16_encounter.json --simulate-only --validate --expect-state-hash 797e827499be64cf` | 15 world-state checks: the phases `lamp_acquired` 811, `lamp_placed` 1356, `lamp_retrieved` 2053, `fuse_available` 3170, `fuse_carried` 3219, `exit_powered` 5779, `escaped` 5960; `patrol` at 300 (the machine passes the open Security door), 1945 (the mirror pass), 3600 (past the Switch room door), 5215 (after the dark return); the mirror pose at 1430 and the hiding place at 4900 within 0.2–0.3 m; `caught_count` 0; the vestibule at 5960 |
+| `sim_t16_caught_cpu_only` | `--replay t16_caught.json --simulate-only --validate --expect-state-hash e72a6407b234f9b3` | 20 checks: `chase` at 3480, `caught_count` 1 at 3514 with the phase kept (`fuse_carried`), the machine back on `patrol`, the player within 0.05 m of the fuse box; the encounter's later checks at their shifted ticks; one catch at the end |
+| `gpu_t16_rules_raw` / `_denoised` / `_exposure` / `_internal_size` | `--replay t16_encounter.json --frames 5961 --validate --headless --expect-state-hash <encounter hash>` with `--mode raw`, `--mode denoised`, `--exposure 0.25`, `--internal 960x540` | T14 on the demo: the four renderings run the same state checks and reproduce the CPU-only hash |
+| `gpu_t16_caught_restart_denoised` | `--replay t16_caught.json --mode denoised --frames 7084 --validate --headless --expect-state-hash <caught hash>` | T15 on the demo under the production renderer: the catch, the checkpoint restart, the completion |
+| `gpu_t16_image_tick421` | `--replay t16_encounter.json --stop-at-tick 421 --mode reference --spp 64 --validate --headless` | Before the fuse: Hall A's fixture face emits (`> 1.0`, measured 4.39) and the floor beside it is lit (`> 0.01`, 0.026) |
+| `gpu_t16_image_tick1945` | `--stop-at-tick 1945 ...` | T05 on the demo: the mirror pixel aimed at (10.3, 1.5, 16.52) reports `threat_head` after one mirror bounce (the machine crossing Hall A behind the open inspection door; the aim is above the player's own torso, which the mirror shows too, D-039); neither the head nor the body is directly visible |
+| `gpu_t16_image_tick2700` / `_tick2715` | `--stop-at-tick 2700` / `2715 ...` | The running fan from the Plant doorway: the pixel of (19.55, 2.45, 6.7) reports `plant_fan_blade0` at tick 2700 (the angle `pi * (2700 - 89.5) / 60` from the spin-up integral, D-048) and the `ceiling` a quarter second later (45 degrees on, the gap between blades); the floor under the fan is lit (`> 0.01`, 0.039) |
+| `gpu_t16_image_tick4014` | `--stop-at-tick 4014 ...` | The glance back after the fuse: the pixel of (19.773, 2.45, 6.503) on the rest angle `pi * 3218 / 60` reports `plant_fan_blade0` (the fan stopped where the symmetric integrals put it); the Plant floor is dark (`< 1e-3`, 0.00000) |
+| `gpu_t16_image_tick4373` | `--stop-at-tick 4373 ...` | The dark return in Hall A: the fixture face is dark (`< 0.01`, 4e-5) and the floor beside it (`< 1e-3`, 2e-5); the machine walks ahead in the dark |
+| `gpu_t16_image_tick5527` | `--stop-at-tick 5527 ...` | The emergency fixture on its own circuit still lights the west wall of Hall A (`> 0.005`, 0.011) |
+| `gpu_t16_image_tick5729` / `_tick5879` | `--stop-at-tick 5729` / `5879 ...` | The pixel of (2.2, 1.2, 3.3) reports the closed `door_exit` before the fuse goes in and `vestibule_wall_south` after (the door opened with its circuit); the wall is lit by the exit fixture (`> 0.02`, 0.092) |
+| `gpu_t16_caught_image_tick7002` | `--replay t16_caught.json --stop-at-tick 7002 ...` | The exit door open and the vestibule lit after the restart (the 5879 checks at their shifted tick) |
+
+The hash constants live in `tests/gpu/CMakeLists.txt` (`LC_T16_ENCOUNTER_HASH`,
+`LC_T16_CAUGHT_HASH`), regenerated only by a deliberate rule change with the `--simulate-only`
+command (the caught variant is derived from the encounter file by a generator that shifts the
+inputs after the catch by the restart's timing; both are committed as plain replay files). A run
+stopped with `--frames N` or `--stop-at-tick N` below a replay's last check tick leaves the later
+state checks unevaluated and says so; a state check inside the run that never fired still fails.
+
+The patch thresholds were chosen before the reference runs; the measured values above are the
+record. A first calibration in denoised mode (the recomposed 1 spp raw mean) read 0.010 on the
+Hall A floor whose converged value is 2e-5 (one bright sample in 25 pixels), which is why the
+replays' image checks run in reference mode (KI-031). That calibration also found two errors that
+the checks were built to catch: the mirror check aimed at the machine's body was blocked by the
+player's own torso in the mirror (the aim moved above it to the head), and the first frozen render
+after the fuse pull never converged because the pocketed fuse's transform was rewritten every
+frame (D-051).
+
+Performance with this content (spec §17 protocol, `tests/scripts/bench_m6.ps1`: three 180-second
+Release runs of the encounter and one of the caught variant): the M6 benchmark table in
+`docs/STATUS.md`. The M6 gate's human items are recorded there.
+
 ### Mirror expectation derivation (`mirror_box`)
 
 Camera at (0, 1.2, 3.0) looking along -Z; mirror front face at z = -1.98 (4.98 m away). A ray that
@@ -239,8 +296,9 @@ Approved image baselines are not yet stored; radiance is currently checked numer
 ## Not yet implemented
 
 T11 systematic offset sweeps (partly covered by the T03/T04 seals and the 400 m furnace floor),
-T16–T18 (T16's fixed 180-second full-encounter replay needs the M6 content; the benchmark
-command exists). The §4 fourth sequence step (the
-threat's shadow moving across a wall before direct contact) is staged in M5. T12 human
-confirmation at normal playback speed is recorded in STATUS.md as NOT RUN with a person; the
-automated lag metric and the frame sequences are the evidence.
+T17 (the 30-minute reliability loop and the repeated resize/focus sequence), T18 (packaging, M7).
+The §4 fourth sequence step (the threat's shadow moving across a wall before direct contact) is
+not staged as a check: the fan's moving shadow and the machine seen in the mirror are the moving
+evidence in the demo. T12 human confirmation at normal playback speed and the M5/M6 play-through by
+a person are recorded in STATUS.md as NOT RUN; the automated metrics, the frame sequences, and the
+replays are the evidence.

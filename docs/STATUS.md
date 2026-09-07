@@ -26,8 +26,26 @@ Milestone:            M0 PASSED, M1 PASSED, M2 PASSED, M3 PASSED,
                       developer explaining each control": no person has played it in this record, so the gate
                       is NOT RUN, not PASSED; the controls card, prompts, menu, and restart exist for that
                       session, and the replays plus the scripted window runs are the evidence until then.
+                      M6 built; every automated row of the test matrix that applies to the demo PASSED; the
+                      rows that need a person NOT RUN. The six-room demo is one schema-2 scene file from the
+                      shared kit (six rooms, two halls, a vestibule; seven doors with the exit door locked
+                      until its circuit is powered; the lamp and the fuse; seven circuits, the hall circuit
+                      powered by the fuse in its box and the exit circuit by the fuse in the exit panel; ten
+                      fixtures with eight active; a ceiling fan under a real fixture; the machine's route
+                      through both halls). Circuits follow item placement every tick and drive emission,
+                      sampling, the fan, its sound, and the exit door from one state. The encounter replay
+                      (99 s) and its caught-and-restarted variant (118 s) pass their world-state checks on the
+                      CPU alone and reproduce the hash under four renderings (T14) and a rendered catch (T15);
+                      fifteen image checks frozen at their ticks pass in reference mode (the mirror shows the
+                      machine's head behind the open door, the running fan's blade at the integrated angle and
+                      the gap a quarter second later, the stopped fan at its rest angle, the fused fixture and
+                      floors dark, the emergency wall lit, the exit door closed then open, the vestibule lit);
+                      the §17 protocol on the demo (three 180-second runs plus the caught variant) is inside
+                      the targets with a large margin (table below). The M6 gate reads "the complete encounter
+                      meets the test matrix": every automated row does; T12's review by a person, the
+                      play-through, and listening are NOT RUN, so the gate as a whole is NOT RUN.
 Build or commit:      branch m0-m1-bootstrap; see git log for the exact commit.
-                      Presets windows-debug and windows-release both configured, built, and tested (54 tests each).
+                      Presets windows-debug and windows-release both configured, built, and tested (72 tests each).
 Environment:          Windows 11 Home 10.0.26200.9278 (25H2); Intel Core i7-14700F, 31.8 GiB RAM;
                       Visual Studio Community 2026 18.9.12120.119, MSVC 14.51.36231 (cl 19.51.36256);
                       CMake 4.3.1-msvc1 (VS-bundled); Windows SDK 10.0.26100.0; DXC 1.8.2502.11 + dxil.dll;
@@ -77,13 +95,34 @@ Implemented in this session:
                       caught_count, player_near) evaluated right after their tick, the per-tick world-state
                       hash, --simulate-only (no graphics), --expect-state-hash, --threat, the t15 route and
                       catch/restart replays, --capture-backbuffer (presented-image evidence).
+                      M6: scene file schema 2 (lists of doors, items, sockets with accept lists, circuits
+                      powered by an item in a socket, the fan object kind, objective steps; the proof migrated
+                      to it), the generalised world (doors that open with their circuit, items in the hand or
+                      the pocket, EvaluateCircuits every tick, fans with a 3 s spin-up and spin-down, the step
+                      list driving phases and checkpoints), routing along the patrol polyline for the machine's
+                      off-path moves, assets/scenes/six_room.json (the measured layout of the plan), the
+                      encounter and caught replays with world-state and image checks, image checks frozen at
+                      their ticks with truncated runs that report the later state checks as not evaluated,
+                      pocket items, the fan loop, tests/scripts/bench_m6.ps1.
 Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean (ImGui and miniaudio at /W3, no warnings); 6
                       shaders (cs_6_5, HLSL 2021, -WX -Zpr) plus NRD's 31 DXIL blobs through ShaderMake with the
                       same DXC.
-                      CPU TESTED: lc_cpu_tests 96/96 PASSED (both presets): + scene-file golden load, rejection
+                      CPU TESTED: lc_cpu_tests 103/103 PASSED (both presets): + scene-file golden load, rejection
                       of every rule, limits and containment (3 cases); collision (6 cases); sound rules (7 cases);
-                      objective, hunt, detection, state hash, state checks, the t15 replays (7 cases).
-                      GPU EXECUTED + PASSED (both presets), 51 GPU tests + 2 CPU-only replay runs (ctest 54/54):
+                      objective, hunt, detection, state hash, state checks, the t15 replays (7 cases); M6: schema
+                      2 goldens and rejections, the fan build, the fuse/fan/locked-door proof, pocket items and
+                      their write rule, the fan loop, the six-room level (enclosure, door swings, budgets,
+                      routing around the corner, the mirror through the CPU caster, sockets and markers).
+                      GPU EXECUTED + PASSED (both presets), 67 GPU tests + 4 CPU-only replay runs (ctest 72/72;
+                      Debug 174 s, Release 140 s):
+                        M6: the static six-room mirror (the machine parked in Hall A seen through the open
+                          inspection door after one bounce, 2e-4); T14 on the encounter (raw, denoised,
+                          exposure 0.25, 960x540 internal: the CPU-only hash 797e827499be64cf reproduced bit for
+                          bit with all 15 state checks); T15 on the caught variant (chase 3479, caught 3513,
+                          the restart to the fuse_carried checkpoint, escaped at 7043; hash e72a6407b234f9b3 on
+                          the CPU and under the denoised renderer); nine frozen reference renders at the
+                          image-check ticks of the encounter and one of the caught variant (docs/TESTS.md lists
+                          each check with its threshold and measured value).
                         M5: t13 reflection (the mirror reports the torso after one bounce, the torso is not
                           directly visible, the reflected torso is lit); every M3/M4 replay now runs against the
                           collision solids with unchanged expectations (Release t06 door-open patch 0.01963);
@@ -106,8 +145,19 @@ Checks actually run:  COMPILED: Debug and Release, /W4 /WX clean (ImGui and mini
                         D3D12 debug layer: 0 errors, 0 warnings in every Debug run; invalid-value counters 0.
 GPU and driver used:  NVIDIA GeForce RTX 4070 SUPER, vendor 0x10DE device 0x2783 rev 161, 11997 MiB,
                       driver 32.0.16.1047 (NVIDIA 610.47, 2026-05-18); DXR Tier 1.2, SM 6.8, root signature 1.1.
-Image evidence:       IMAGE CHECKED (artifacts/m4 and artifacts/m5/ui, regenerate with docs/BUILD.md and
-                      docs/TESTS.md; not committed).
+Image evidence:       IMAGE CHECKED (artifacts/m4, artifacts/m5/ui, and artifacts/m6, regenerate with
+                      docs/BUILD.md and docs/TESTS.md; not committed).
+                      M6 (artifacts/m6/encounter, the nine reference renders of the encounter's image-check
+                      ticks with their logs; artifacts/m6/six_room_static): tick 1945 shows the dark inspection
+                      room with the mirror framing the lit doorway and the machine's silhouette (head above
+                      body) crossing behind it, fireflies of the 64 spp dark-room render (KI-014) and nothing
+                      else in the room; tick 2700 shows the Plant doorway with the open leaf, the fixture on the
+                      ceiling and the fan's hub under it (the blades are edge-on from the doorway; the identity
+                      checks are the evidence for them); tick 5879 shows the vestibule lit by its fixture with
+                      the open exit leaf on the left and the panel box on the right; tick 4373 (denoised
+                      capture during calibration) shows Hall A dark with the emergency fixture's orange glow at
+                      the far end, the machine's silhouette walking ahead, and the fused fixture as a dark
+                      rectangle on the ceiling.
                       M5 interface: seven screen captures of the live window (controls card, door prompt, pause
                       menu, menu with the F1 panel, play with the panel, "Close the door" after the door opened
                       with the threat in the doorway, the start pose after Restart from the menu); the pass table
@@ -130,14 +180,29 @@ Image evidence:       IMAGE CHECKED (artifacts/m4 and artifacts/m5/ui, regenerat
                       without the reference render's fireflies. Sequences: the mirror crop over frames 735-769 shows
                       the silhouette crossing and leaving with crisp edges and no ghost (event log beside it); the
                       door edge and the carried lamp sequences likewise.
-Performance evidence: PERFORMANCE CHECKED, instrumentation and the §17 protocol on the two-room proof (not the full
-                      encounter): see the benchmark tables below (M4, and M5 with the body, the hunting machine,
-                      sound on, interface off). Frame-time distributions come from --benchmark-seconds reports
-                      (Release, vsync off, windowed 1920x1080 output, 1280x720 internal, denoised mode). With the
-                      M5 content the GPU frame averages 1.8 ms with p99 at 2.0-2.3 ms and no frame above 33.3 ms
-                      in four 60-second runs; the working set grew from about 180 MB to about 300 MB (clips, the
-                      audio engine, the interface); video memory in use 345 MB.
-Failed checks:        None outstanding. During M5: the first body placement (torso 5 cm in front of the eye) hid
+Performance evidence: PERFORMANCE CHECKED with the §17 protocol on the complete encounter (M6 table below): three
+                      180-second Release runs of the encounter replay and one of the caught variant (vsync off,
+                      windowed 1920x1080 output, 1280x720 internal, denoised mode, sound on, interface off, 5 s
+                      warm-up excluded and recorded): GPU frame average 1.83-1.93 ms, median 1.80-1.83, p95
+                      2.06-2.37, p99 2.23-2.46, maximum 2.87-3.12 ms; CPU p95 2.09-2.39 ms; no frame above
+                      33.3 ms or 50 ms; working set 292-295 MB (peak 298), video memory in use 345 MB (budget
+                      11.0 GiB). The pass criterion (p95 <= 16.67 ms, p99 <= 22 ms) holds with a wide margin;
+                      the benchmark runs one simulation tick per rendered frame uncapped, so each 180-second
+                      window covers the 99 s encounter 15-16 times (the report records the loops). Earlier
+                      tables (M4, M5) below for the proof.
+Failed checks:        None outstanding. During M6: the first hand rule ("one held item") refused the fuse while
+                      the lamp was carried, so the encounter stalled at the fuse box (D-051: pocket items). The
+                      first frozen reference render after the fuse pull never converged: the pocketed fuse's
+                      transform was rewritten every frame and counted as motion (a TLAS rebuild and an
+                      accumulation reset per frame); the write now follows the feet pose. A world-state check
+                      sharing a stop tick with an image check was reported as an unknown image check (the two
+                      loops are now separate). The mirror check aimed at the machine's body found the player's
+                      own torso in the mirror first (spec §14: the body is real geometry), so the aim moved
+                      above it to the head. The glance at the stopped fan turned the wrong way (the look sign).
+                      A denoised-mode calibration read 0.010 on a floor whose converged value is 2e-5 (KI-031),
+                      which is why the image checks run frozen in reference mode. The M5 record omitted a
+                      linker warning (LNK4098, KI-034) that has been present since the sound task.
+                      During M5: the first body placement (torso 5 cm in front of the eye) hid
                       the T06 floor patch a metre ahead and the door-open check fell from 0.0196 to 0.0048 (below
                       its 0.005 minimum); fixed by moving the body behind the eye axis (D-039), not the threshold.
                       The mirror replay grazed the sink block once collision existed (the sink moved 20 cm). A
@@ -153,24 +218,29 @@ Failed checks:        None outstanding. During M5: the first body placement (tor
                       check point was off screen (moved to a pixel). The scaled resize test first judged the
                       internal size instead of the presented size.
 Checks not run and reasons:
-                      T11 offset sweeps, T13's sound part (Task 4), T14-T18 (later; T16 needs the 180-second
-                      full-encounter replay of M5/M6, the command exists). DLSS/Streamline: NOT RUN (deferred).
-                      History confidence inputs: not provided (KI-019). Second RTX device: only one GPU present.
-                      30-minute reliability loop, live-object report under a debugger: NOT RUN. T12 review by a
-                      person at normal playback speed: NOT RUN (the automated lag metric, the frame sequences, and
-                      the overlays are the evidence). The menu's mouse path was driven by posted messages, not a
-                      person's hand. The M5 gate play-through by a person (spec §20): NOT RUN; listening to the
-                      sound: NOT RUN. Both need the owner or a tester at the keyboard with headphones; the command
-                      is `LastCircuit.exe --scene two_room --play --mode denoised --exposure 4`.
+                      T11 offset sweeps; T17 (the 30-minute reliability loop, repeated resize and focus
+                      sequences beyond the resize tests, the live-object report under a debugger); T18
+                      (packaging, M7). DLSS/Streamline: NOT RUN (deferred). History confidence inputs: not
+                      provided (KI-019). Second RTX device: only one GPU present. T12 review by a person at
+                      normal playback speed: NOT RUN (the automated lag metric, the frame sequences, and the
+                      overlays are the evidence). The menu's mouse path was driven by posted messages, not a
+                      person's hand. The M5 and M6 gate play-throughs by a person (spec §20): NOT RUN; listening
+                      to the sound: NOT RUN. Both need the owner or a tester at the keyboard with headphones;
+                      the commands are `LastCircuit.exe --scene two_room --play --mode denoised --exposure 4`
+                      and `LastCircuit.exe --scene six_room --play --mode denoised --exposure 4`. The demo's
+                      image checks are numerical identities and patch means at nine ticks; no reviewer has
+                      watched the encounter at playback speed.
 Changed assumptions:  NRD's license is NVIDIA's proprietary RTX SDK license (attribution required; not open source):
                       recorded for the owner's review. The denoiser's spatial filter biases sharp lighting gradients
                       by a few percent (KI-018); the raw mean stays exact. Mirror planes are static for the PSR
                       motion (KI-020).
-Next concrete task:   M6, the six-room demo (spec §4 room table, §20): write the plan (layout from the shared kit
-                      as a schema-1 scene file, the fuse as the objective's second carried object with its
-                      circuit change, the return sequence in the dark, the exit onto a lit space, waypoint routing
-                      for the machine, the 180-second full-encounter replay for T16), then build it room by
-                      room with the same evidence discipline. The M5 gate's play-through waits for a person.
+Next concrete task:   M7 (spec §20): the package that a clean machine runs without a developer SDK, asset
+                      download, or API credential (T18): decide the CRT (KI-034) and the redistributable, a
+                      packaging script with the executable, shaders, assets, licenses, and the environment
+                      report, the loading phase before the first frame (KI-022), the tone curve (KI-008,
+                      KI-016), the reliability loop and resize/focus sequences (T17), and the human items of
+                      the M5/M6 gates when a person is available. Open budgets: the reusable-mesh count
+                      (KI-029).
 ```
 
 ## Benchmark table (M4, two-room proof)
@@ -217,8 +287,38 @@ Reading: the two-room proof, reconstructed, uses about 2 ms of the 16.67 ms fram
 GPU (spec §17 planning allocation 13 ms); the 95th and 99th percentiles are within 3.3 ms. The
 proof is far smaller than the six-room encounter, so these are not the product's numbers: the
 §17 pass criterion (p95 <= 16.67 ms, p99 <= 22 ms) is checked again with the M6 content on the
-180-second replay. M4 process working set about 180 MB, video memory in use about 300 MB
+encounter replay (the M6 table). M4 process working set about 180 MB, video memory in use about 300 MB
 (`artifacts/m4/benchmark_release_*.json`). The Debug build with the debug layer on measures the
 same GPU time (its `-Od` shaders do not dominate a RayQuery-bound frame). An earlier set of
 mirror-replay runs was invalid: the benchmark loop then still executed the trail-lag test's
 per-frame readback (60 ms CPU frames); the loop now never reads back (recorded, not hidden).
+
+## Benchmark table (M6, the six-room demo; spec §17 protocol)
+
+Filled from `artifacts/m6/benchmark_release_*.json` (`tests/scripts/bench_m6.ps1`: Release at the
+M6 Task 5 commit, `--vsync off`, no frame cap, windowed 1920x1080 with `--internal 1280x720`,
+denoised mode, 4 hits, 30-frame history, anti-firefly on, sound on through the HDMI output, no
+interface; each run 5 s of warm-up (about 2500 frames, excluded and recorded in the report) then
+180 s measured). The fixed replay is the encounter (camera movement through six rooms and two
+halls, the mirror, the moving machine, the carried lamp and its switch, the fuse's source change
+on five fixtures and the fan, seven doors); the benchmark runs one simulation tick per rendered
+frame uncapped and loops the replay with a world reset, so the 99 s encounter is covered 15-16
+times in each window. The caught variant adds a catch and a checkpoint restart per loop.
+
+| Replay | Frames (180 s) | Loops | GPU avg / median / p95 / p99 / max (ms) | CPU avg / median / p95 / p99 / max (ms) | GPU > 33.3 / 50 ms | Working set (peak) / VRAM |
+|---|---|---|---|---|---|---|
+| t16_encounter, run 1 | 92022 | 15 | 1.93 / 1.83 / 2.37 / 2.46 / 3.12 | 1.95 / 1.88 / 2.39 / 2.51 / 4.04 | 0 / 0 | 292 (293) MB / 345 MB |
+| t16_encounter, run 2 | 93133 | 16 | 1.91 / 1.83 / 2.28 / 2.44 / 2.95 | 1.93 / 1.89 / 2.27 / 2.45 / 4.23 | 0 / 0 | 294 (295) MB / 345 MB |
+| t16_encounter, run 3 | 95543 | 16 | 1.86 / 1.81 / 2.09 / 2.29 / 2.87 | 1.88 / 1.86 / 2.12 / 2.29 / 3.75 | 0 / 0 | 295 (298) MB / 345 MB |
+| t16_caught (a catch and a restart per loop) | 96753 | 14 | 1.83 / 1.80 / 2.06 / 2.23 / 2.87 | 1.86 / 1.85 / 2.09 / 2.24 / 4.29 | 0 / 0 | 292 (296) MB / 345 MB |
+
+GPU pass averages over the runs: path_trace 0.61-0.64 ms, denoise 0.86-0.90 ms, compose
+0.24-0.26 ms, upscale 0.03 ms, scene_update 0.07-0.08 ms, copy_out 0.02 ms; denoiser pool 66 MB;
+video memory budget reported by the adapter 11.0 GiB. Reading: the complete encounter costs the
+same 2 ms of the 16.67 ms frame period as the proof on this GPU (the level is larger but the work
+per pixel is the same: one path per internal pixel, four hits, one TLAS); the §17 pass criterion
+(p95 <= 16.67 ms, p99 <= 22 ms) holds with an eight-fold margin, and the memory targets (8 GiB
+working, 6 GiB video) by a factor of 25 and 17. This is one GPU (RTX 4070 SUPER) above the spec's
+RTX 4060 test target; the target device was not measured (KI-006). The first run's p95 (2.37 ms)
+against the third's (2.09) is the run-to-run spread also seen in M4 and M5; nothing in the logs
+shows a stall.

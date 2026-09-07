@@ -233,6 +233,41 @@ Format: date, issue, evidence, decision, consequence, rollback.
 - Decision: `--simulate-only` runs a replay through the same `World`, `Simulation`, and state checks with no device, window, or renderer, and prints an FNV-1a hash over every tick's objective phase, threat state and pose, player pose, lamp, door angle and state, and catches. Rendered runs take `--expect-state-hash` and fail when their hash differs. The T14 tests run the route replay in raw and denoised modes, at exposure 0.25, and at a 960x540 internal size against the CPU-only constant, so exposure, resolution, and reconstruction provably leave the rules alone.
 - Consequence: the constants are goldens regenerated on purpose only; the game layer's independence from rendering is a tested property, not a claim.
 
+## D-046 (2026-09-07) Scene file schema 2: lists of doors, items, sockets, powered circuits, the fan, objective steps
+
+- Decision: schema 2 replaces the proof's singular entities with lists. `entities.doors[]` (id, object, `locked`, `opensWithCircuit`), `entities.items[]` (id, text, a plain `object` or a lamp's `housing` + `face` + `light`, `startSocket`, `hidesWhenCarried`), `sockets[]` with `accepts` (item ids) and a prompt `text`, `circuits[]` with an optional `poweredBy {item, socket}` (the initial `on` must agree with the item's start socket), the object kind `fan` (centre, axis, radius, blade count, width, thickness, hub radius, rpm, circuit; the loader generates the hub and the blades as separate instances `<id>_hub`, `<id>_blade<n>`), `objectives[]` as ordered steps of kind `take` / `place` / `reach` (item, socket, marker and radius, `requires`, text) whose ids are the phase names, and `objectiveComplete`. Every id is cross-checked (a door leaf without a door entity, a socket that accepts an unknown item, a `poweredBy` that names a socket which does not accept the item, are errors that name their list and field). `assets/scenes/two_room.json` moved to schema 2 with the same geometry and ids.
+- Consequence: the level and the world hold vectors; the proof's replays behave exactly as before (the M5 hashes were regenerated once because the hash now covers every door, item, fan, and circuit, and the events kept their ticks); a new level needs no code for its doors, items, sockets, circuits, or steps.
+
+## D-047 (2026-09-07) Circuits follow item placement; fixtures, the fan, and doors follow their circuit
+
+- Decision: `World::EvaluateCircuits` runs every tick after the items: a circuit with `poweredBy` is on exactly when its item sits in that socket. A change switches the circuit's emitter materials (`Scene::SetEmitterOn`, so sampling and sound follow the same state), sets the fan's target speed, and opens a door with `opensWithCircuit` when the circuit turns on. A `locked` door is never offered by the prompt and ignores E; it opens only through its circuit and stays open when the circuit dies. The same evaluation runs at construction and after a checkpoint restore.
+- Consequence: spec §15's "removing the fuse changes circuit state ... the same state drives fixture emission, source data, fixture sound, and relevant animations" is one code path with no scripted light; the checkpoint captures item placement and the circuits derive from it.
+
+## D-048 (2026-09-07) The fan: boxes rotated by the world with a linear spin-up and spin-down
+
+- Decision: the fan's hub and blades are ordinary boxes (`fan_metal`, a rough conductor) whose transforms the world rewrites every tick while the angle changes: `Translation(centre) * RotationAxis(axis, angle) * local`. The angular speed follows the circuit with a linear 3 s ramp (`Fan::kSpinSeconds`) both ways, so the angle after the ramp is the integral of the ramp (a check at tick N of the running fan expects `pi * (N - 89.5) / 60` for 30 rpm; the rest angle after a pull at tick P is `pi * P / 60` because the two integrals are symmetric). The fan loop's level is the speed fraction; a stopped fan is silent (spec §15).
+- Consequence: the blades cast moving shadows from the real fixture behind them (spec §5) with no special rendering; the angle is part of the state hash and the checkpoint; a stopped fan costs no transform writes.
+
+## D-049 (2026-09-07) Hall routing along the patrol polyline instead of a navigation mesh
+
+- Decision: when an off-path move (chase lost, investigate, return) is blocked at body height (`CollisionWorld::SegmentClear` 0.6 m up), `Threat::PlanRoute` walks the patrol polyline between the closest points of the start and the target and follows the intermediate vertices (`FollowRoute`; a leg that stays blocked for 1.5 s is skipped). A straight clear line is still taken directly. `Threat::Teleport` and `BeginReturn` exist for tests that stage the machine.
+- Consequence: spec §15's "simple room and hall waypoints" without a mesh; the machine returns from the Plant doorway to Hall B around the corner in 58 ticks in the CPU test; KI-026 is closed for the halls (a room interior still uses the straight line and the stuck timer).
+
+## D-050 (2026-09-07) The static mirror check looks through an open door
+
+- Decision: `entities.mirror.openDoor` names a door the static scene opens for the mirror aim and the `gpu_six_room_static_mirror` check; the world still starts with every door closed (the objective opens it). The six-room mirror is aimed from the inspection check pose through the inspection doorway at the hall point the machine crosses; its centre sits at 1.3 m so the reflected ray from the 1.6 m eye descends onto the machine's body.
+- Consequence: the T05 evidence exists for the demo without a replay; the mirror stays a plain mirror box.
+
+## D-051 (2026-09-07) Pocket items: an item that hides when carried never needs the hand
+
+- Decision: one item in the hand at a time (a held item that does not hide when carried); an item with `hidesWhenCarried` goes into the pocket (parked inside the torso box) and can be taken while the hand is full; a socket's prompt and placement act on whichever held item it accepts. The first M6 rule ("one held item") refused the fuse while the lamp was carried, which contradicts spec §15's phase order (fuse carried after lamp acquired, the escape with the lamp).
+- Consequence: the lamp stays in the hand through the fuse route; `Take the fuse` and `Put the fuse in the exit panel` are offered with the lamp held; the CPU test pins both rules and the pocketed item's transform is rewritten only when the player moves (an every-frame rewrite counted as motion: a TLAS rebuild each frame and a reference accumulation that never converged, found by the first frozen render after the fuse pull).
+
+## D-052 (2026-09-07) Image checks of long replays run frozen at their tick in reference mode
+
+- Decision: a replay's image checks are evaluated on the final image of a run, so a check at tick N runs as `--stop-at-tick N --mode reference --spp 64` (the world advances on the CPU, one converged render is checked). A run stopped early on purpose leaves the state checks beyond its stop tick unevaluated and reports them as such instead of failing; a state check inside the run that never fired is still a failure. Patch thresholds were set before the reference runs (lit floors > 0.01, the emergency wall > 0.005, the vestibule > 0.02, an emitting fixture face > 1.0, dark surfaces < 1e-3, a dark fixture face < 0.01) and are recorded with the measured values in docs/TESTS.md.
+- Consequence: fourteen frozen runs of a second each replace one long noisy run: the recomposed 1 spp raw mean of a 5x5 patch in denoised mode read 0.010 on a floor whose converged value is 2e-5 (one bright sample), which would have made every dark check meaningless; per-frame image evaluation inside a single run was not built.
+
 ## D-013 (2026-09-06) Repository workflow for this session
 
 - Decision: work on branch `m0-m1-bootstrap` with small commits; nothing is pushed; `build/` and `artifacts/` are ignored. The owner decides on merging.

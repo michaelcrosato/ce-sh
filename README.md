@@ -23,8 +23,12 @@ with a reload command (M3.5). The playable proof (M5) has collision, a placehold
 mirror, on-screen prompts, a pause menu with settings, a diagnostic panel, generated sound that
 follows the world state, a machine that patrols, chases, and catches on gameplay data alone, an
 objective with checkpoints and a restart, and replays that prove the rules do not depend on
-rendering; the performance re-measurement and the human play-through close it. Details, evidence
-labels, and the next task: [`docs/STATUS.md`](docs/STATUS.md).
+rendering; the human play-through is still to come. The six-room demo (M6) is one scene file built
+from the same kit: six rooms and two halls, seven doors, the lamp and the fuse, circuits that follow
+where the fuse sits (the halls go dark, the fan spins down, the exit powers up), a ceiling fan under
+a real fixture, the machine hunting through both halls, and two fixed replays (the encounter and a
+caught-and-restarted variant) checked on the CPU, under the renderer, and frozen at their image
+ticks. Details, evidence labels, and the next task: [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Quick start
 
@@ -36,6 +40,7 @@ cmake --build --preset windows-debug
 ctest --preset windows-debug --output-on-failure
 .\build\windows-debug\bin\LastCircuit.exe --scene two_room --play --exposure 4 # walk the two-room proof (WASD, mouse, E, F; Escape menu, F1 panel, R reload; sound on, --no-audio off)
 .\build\windows-debug\bin\LastCircuit.exe --scene two_room --play --mode denoised --exposure 4   # the same, reconstructed (NRD)
+.\build\windows-release\bin\LastCircuit.exe --scene six_room --play --mode denoised --exposure 4 # the six-room demo (M6): lamp, mirror, fan, fuse, dark return, exit
 .\build\windows-debug\bin\LastCircuit.exe --scene t08_box --mode reference     # path-traced Cornell-style box
 .\build\windows-debug\bin\LastCircuit.exe --scene rt_boxes --mode diag         # M1 diagnostic normals view
 ```
