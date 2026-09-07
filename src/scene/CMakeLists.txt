@@ -1,9 +1,13 @@
-# lc_scene: portable scene data (meshes, instances, camera, generated scenes). No D3D12 types.
+# lc_scene: portable scene data (meshes, materials, instances, emitters, camera, generated scenes). No D3D12 types.
 add_library(lc_scene STATIC
     builtin_scenes.cpp
     builtin_scenes.h
     camera.cpp
     camera.h
+    emitters.cpp
+    emitters.h
+    material.cpp
+    material.h
     mesh.cpp
     mesh.h
     primitives.cpp

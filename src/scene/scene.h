@@ -1,9 +1,10 @@
-// Scene registry: meshes and placed instances with stable identifiers and transform history.
-// The game layer edits this; the renderer reads a snapshot of it. No D3D12 types here.
+// Scene registry: meshes, materials, and placed instances with stable identifiers and transform
+// history. The game layer edits this; the renderer reads a snapshot of it. No D3D12 types here.
 #pragma once
 
 #include "core/ids.h"
 #include "core/math/mat.h"
+#include "scene/material.h"
 #include "scene/mesh.h"
 
 #include <cstdint>
@@ -31,8 +32,14 @@ inline constexpr std::uint32_t kMaxInstanceId = (1u << 24) - 1;  // D3D12 Instan
 
 class Scene {
 public:
+    // Material 0 is a default grey diffuse so instances without an explicit material are valid.
+    Scene();
+
     // Validates the mesh (throws lc::Error listing every problem) and returns its id.
     MeshId AddMesh(MeshData data);
+
+    // Validates the material (throws lc::Error) and returns its index.
+    std::uint32_t AddMaterial(Material material);
 
     InstanceId AddInstance(std::string name, MeshId mesh, const math::Mat4& objectToWorld,
                            std::uint32_t materialIndex = 0);
@@ -41,21 +48,28 @@ public:
     // CommitRenderedFrame so motion vectors always refer to the last rendered image.
     void SetTransform(InstanceId id, const math::Mat4& objectToWorld);
 
+    // Switches an emitter material on or off (a circuit change). Bumps the material revision.
+    void SetEmitterOn(std::uint32_t materialIndex, bool on);
+
     // Call once after an image has been rendered: previous transforms become the current ones.
     void CommitRenderedFrame();
 
     const std::vector<Mesh>& Meshes() const { return meshes_; }
+    const std::vector<Material>& Materials() const { return materials_; }
     const std::vector<Instance>& Instances() const { return instances_; }
     const Instance* FindInstance(InstanceId id) const;
     std::uint32_t MeshIndex(MeshId id) const { return id.value; }
     std::uint32_t TotalTriangles() const;
+    std::uint32_t MaterialRevision() const { return materialRevision_; }
 
 private:
     Instance* FindInstanceMutable(InstanceId id);
 
     std::vector<Mesh> meshes_;
+    std::vector<Material> materials_;
     std::vector<Instance> instances_;
     std::uint32_t nextInstanceId_ = 1;
+    std::uint32_t materialRevision_ = 0;
 };
 
 }  // namespace lc

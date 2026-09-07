@@ -17,6 +17,8 @@ add_library(lc_core STATIC
     math/camera_math.h
     math/mat.cpp
     math/mat.h
+    math/radiometry.cpp
+    math/radiometry.h
     math/vec.h
 )
 
